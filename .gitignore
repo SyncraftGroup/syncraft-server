@@ -1,0 +1,4 @@
+/target
+*.toml
+!Cargo.toml
+/syncraft-test-neoforge
