@@ -11,7 +11,6 @@ pub enum MessageKey<'a> {
     AlreadyInitialized,
     InputServerName,
     InputVanillaVersion,
-    InputLoaderVersion(String),
     VersionInfoDisplay(&'a VersionInfo),
     VersionInfoConfirm,
     ContinueToInitializeConfirm,
@@ -100,9 +99,9 @@ pub fn confirm(prompt: MessageKey) -> Result<bool, Error> {
 pub fn translate(key: MessageKey) -> String {
     match key {
         MessageKey::Initializing => match get_locale() {
-            Locale::En => "Initializing",
-            Locale::Zh => "初始化工作区"
-        }.green().finish(),
+            Locale::En => "Initializing...",
+            Locale::Zh => "初始化工作区..."
+        }.green().bold().finish(),
         MessageKey::InitOutsideMinecraftServerDirectory => match get_locale() {
             Locale::En => "Initializing out of a runned Minecraft server directory",
             Locale::Zh => "当前目录不是已经运行过的 Minecraft 服务器目录"
@@ -124,10 +123,6 @@ pub fn translate(key: MessageKey) -> String {
         MessageKey::InputVanillaVersion => match get_locale() {
             Locale::En => "Please enter your server's version (e.t. 1.20.1):",
             Locale::Zh => "请输入服务器版本（e.t. 1.20.1）："
-        }.bright_cyan().finish(),
-        MessageKey::InputLoaderVersion(loader) => match get_locale() {
-            Locale::En => format!("Please enter you {loader}'s version:"),
-            Locale::Zh => format!("请输入您的 {loader} 版本：")
         }.bright_cyan().finish(),
         MessageKey::VersionInfoDisplay(info) => match get_locale() {
             Locale::En => vec![

@@ -2,3 +2,4 @@
 *.toml
 !Cargo.toml
 /syncraft-test-neoforge
+/yggdrasil

@@ -1,14 +1,14 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::{Path, PathBuf}};
 
 use git2::Repository;
 use syncraft_protocol::{Loader, VersionInfo};
 
 use crate::{config::Config, error::Error, paths::SyncraftPaths, ui::{self, MessageKey}};
 
-pub async fn run(cwd: PathBuf, force: bool) -> Result<(), Error> {
-    if looks_like_mc_server_dir(&cwd)? {
-
-        let paths = SyncraftPaths::new(cwd);
+pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
+    if looks_like_mc_server_dir(&paths.root())? {
+        ui::message(MessageKey::Initializing);
+        let paths = SyncraftPaths::new(paths.root());
         if paths.workspace().exists() {
             if force
             && ui::confirm(MessageKey::CleanUpWorkSpaceConfirm)? {
@@ -155,7 +155,7 @@ async fn cleanup_old_workspace(
     Ok(())
 }
 
-pub fn looks_like_mc_server_dir(cwd: &PathBuf) -> Result<bool, Error> {
+fn looks_like_mc_server_dir(cwd: &Path) -> Result<bool, Error> {
     if cwd.join("server.properties").exists()
     && cwd.join("eula.txt").exists()
     && cwd.join("libraries").exists() {
@@ -248,6 +248,7 @@ pub fn guess_version(path: PathBuf) -> (Option<String>, Loader) {
 #[tokio::test]
 async fn init_test() -> Result<(), Error> {
     let cwd = std::env::current_dir()?.join("syncraft-test-neoforge");
-    run(cwd, true).await?;
+    let paths = SyncraftPaths::new(cwd);
+    run(paths, true).await?;
     Ok(())
 }

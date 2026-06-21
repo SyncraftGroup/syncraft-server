@@ -1,10 +1,8 @@
-use std::{fs, io::Write, path::PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use syncraft_protocol::{Loader, VersionInfo};
-
-use crate::error::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncObject {
@@ -30,24 +28,4 @@ impl Default for Config {
             sync: Vec::new()
         }
     }
-}
-
-#[test]
-fn test() -> Result<(), Error> {
-    let config = Config {
-        info: VersionInfo {
-            name: "test".into(),
-            vanilla_version: "test".into(),
-            loader: Loader::Vanilla
-        },
-        sync: vec![SyncObject {
-            path: PathBuf::from("foo"),
-            to: PathBuf::from("bar"),
-            is_mods_dir: None
-        }]
-    };
-    let config_str = toml::to_string_pretty(&config).unwrap();
-    let mut f = fs::File::create("test.toml")?;
-    f.write(&config_str.into_bytes())?;
-    Ok(())
 }

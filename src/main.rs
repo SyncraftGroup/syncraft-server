@@ -1,12 +1,15 @@
+use axum::Router;
 use clap::{Parser, Subcommand};
+use tokio::net::TcpListener;
 
-use crate::error::Error;
+use crate::{error::Error, paths::SyncraftPaths};
 
 mod error;
 mod config;
 mod ui;
 mod paths;
 mod init;
+mod yggdrasil;
 
 #[derive(Parser)]
 #[command(
@@ -21,8 +24,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Initialize a workspace
-    Init,
-    /// Start the Syncraft server
+    Init {
+        /// Delete the old workspace if one exists
+        #[arg(long)]
+        force: bool
+    },
+    /// Start the syncraft server
     Serve,
     /// Publish a new version
     Publish,
@@ -33,11 +40,19 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
+    let cwd = std::env::current_dir()?;
+    let paths = SyncraftPaths::new(cwd);
 
     match cli.command {
-        Command::Init => {
+        Command::Init { force } => {
+            init::run(paths, force).await?;
         }
         Command::Serve => {
+            let app = Router::new()
+                .nest("/yggdrasil", yggdrasil::init(paths).await?);
+
+            let listener = TcpListener::bind("0.0.0.0:3000").await?;
+            axum::serve(listener, app).await?;
         }
         Command::Publish => {
         }

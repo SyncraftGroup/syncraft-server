@@ -16,7 +16,9 @@ impl SyncraftPaths {
     pub async fn create_dirs(&self) -> Result<(), Error> {
         tokio::try_join!(
             fs::create_dir_all(self.root()),
-            fs::create_dir_all(self.data())
+            fs::create_dir_all(self.workspace()),
+            fs::create_dir_all(self.data()),
+            fs::create_dir_all(self.yggdrasil().root())
         )?;
         Ok(())
     }
@@ -33,7 +35,26 @@ impl SyncraftPaths {
         self.root().join("syncraft.toml")
     }
 
+    pub fn yggdrasil(&self) -> YggdrasilPaths<'_> {
+        YggdrasilPaths { paths: self }
+    }
+
     pub fn data(&self) -> PathBuf {
         self.workspace().join("data")
+    }
+}
+
+pub struct YggdrasilPaths<'a> {
+    pub paths: &'a SyncraftPaths
+}
+
+impl YggdrasilPaths<'_> {
+
+    pub fn root(&self) -> PathBuf {
+        self.paths.root().join("yggdrasil")
+    }
+
+    pub fn db_path(&self) -> PathBuf {
+        self.root().join("users.db")
     }
 }
