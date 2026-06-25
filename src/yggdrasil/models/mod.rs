@@ -12,7 +12,39 @@ pub struct User {
     pub email: String,
     pub password_hash: String,
     pub email_verified: bool,
-    pub character_name: String,
+    pub character_name: String
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum YggdrasilSkinType {
+    Default,
+    Slim,
+}
+
+impl ToString for YggdrasilSkinType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Default => "default".to_string(),
+            Self::Slim => "slim".to_string()
+        }
+    }
+}
+
+impl From<String> for YggdrasilSkinType {
+    fn from(value: String) -> Self {
+        if value == "slim" { Self::Slim }
+        else { Self::Default }
+    }
+}
+
+impl From<mc_skin::SkinType> for YggdrasilSkinType {
+    fn from(value: mc_skin::SkinType) -> Self {
+        match value {
+            mc_skin::SkinType::Default => Self::Default,
+            mc_skin::SkinType::Slim => Self::Slim
+        }
+    }
 }
 
 /// The status of a token determined purely by its age.
@@ -62,4 +94,10 @@ pub struct YggdrasilError {
 pub struct Profile {
     pub id: String,
     pub name: String
+}
+
+pub struct JoinRequestCache {
+    pub user_id: String,
+    pub character_name: String,
+    pub timestamp: DateTime<Utc>  
 }

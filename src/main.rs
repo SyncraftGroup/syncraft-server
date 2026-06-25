@@ -2,7 +2,7 @@ use axum::Router;
 use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
 
-use crate::{error::Error, paths::SyncraftPaths};
+use crate::{config::Config, error::Error, paths::SyncraftPaths};
 
 mod error;
 mod config;
@@ -48,11 +48,15 @@ async fn main() -> Result<(), Error> {
             init::run(paths, force).await?;
         }
         Command::Serve => {
-            let app = Router::new()
-                .nest("/yggdrasil", yggdrasil::init(paths).await?);
+            if let Some(config) = Config::load(&paths).await {
+                let app = Router::new()
+                    .nest("/yggdrasil", yggdrasil::init(&paths, config.yggdrasil).await?);
 
-            let listener = TcpListener::bind("0.0.0.0:3000").await?;
-            axum::serve(listener, app).await?;
+                let listener = TcpListener::bind("0.0.0.0:3000").await?;
+                axum::serve(listener, app).await?;
+            } else {
+                ui::message(ui::MessageKey::Uninitialized);
+            }
         }
         Command::Publish => {
         }

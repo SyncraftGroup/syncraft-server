@@ -57,4 +57,8 @@ impl YggdrasilPaths<'_> {
     pub fn db_path(&self) -> PathBuf {
         self.root().join("users.db")
     }
+
+    pub fn private_key(&self) -> PathBuf {
+        self.root().join("key.pem")
+    }
 }

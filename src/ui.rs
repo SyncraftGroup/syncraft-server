@@ -7,6 +7,7 @@ use crate::error::Error;
 
 pub enum MessageKey<'a> {
     Initializing,
+    Uninitialized,
     InitOutsideMinecraftServerDirectory,
     AlreadyInitialized,
     InputServerName,
@@ -102,6 +103,10 @@ pub fn translate(key: MessageKey) -> String {
             Locale::En => "Initializing...",
             Locale::Zh => "初始化工作区..."
         }.green().bold().finish(),
+        MessageKey::Uninitialized => match get_locale() {
+            Locale::En => "Cannot find valid syncraft workspace. Please run init.",
+            Locale::Zh => "找不到合法的 syncraft 工作区。请执行 init 命令。"
+        }.yellow().finish(),
         MessageKey::InitOutsideMinecraftServerDirectory => match get_locale() {
             Locale::En => "Initializing out of a runned Minecraft server directory",
             Locale::Zh => "当前目录不是已经运行过的 Minecraft 服务器目录"

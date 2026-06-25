@@ -23,3 +23,10 @@ tokio = { version = "1.52.3", features = ["full"] }
 toml = "1.1.2"
 rand_core = { version = "0.6", features = ["getrandom"] }
 chrono = { version = "0.4.45", features = ["serde"] }
+mc-skin = "0.1.0"
+sha2 = "0.11.0"
+hex = "0.4.3"
+base64 = "0.22.1"
+rsa = { version = "0.9.10", features = ["pem", "sha1"] }
+sha1 = "0.10.0"
+axum-extra = { version = "0.12.6", features = ["multipart", "typed-header"] }

@@ -16,4 +16,32 @@ pub enum Error {
     Database(#[from] sqlx::Error),
     #[error("{0}")]
     PasswordHash(argon2::password_hash::Error),
+    #[error("{0}")]
+    Sign(String),
+    #[error("{0}")]
+    SkinUpload(String)
+}
+
+impl From<axum_extra::extract::multipart::MultipartError> for Error {
+    fn from(value: axum_extra::extract::multipart::MultipartError) -> Self {
+        Self::SkinUpload(value.to_string())
+    }
+}
+
+impl From<rsa::pkcs8::spki::Error> for Error {
+    fn from(value: rsa::pkcs8::spki::Error) -> Self {
+        Self::Sign(value.to_string())
+    }
+}
+
+impl From<rsa::pkcs8::Error> for Error {
+    fn from(value: rsa::pkcs8::Error) -> Self {
+        Self::Sign(value.to_string())
+    }
+}
+
+impl From<rsa::Error> for Error {
+    fn from(value: rsa::Error) -> Self {
+        Self::Sign(value.to_string())
+    }
 }

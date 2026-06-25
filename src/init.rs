@@ -43,7 +43,7 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
 
         let config = Config {
             info: version_info,
-            sync: Vec::new(),
+            ..Default::default()
         };
 
         write_config(&paths, &config).await?;

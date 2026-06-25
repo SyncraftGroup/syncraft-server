@@ -4,10 +4,11 @@ use argon2::{
 };
 use chrono::{DateTime, Utc};
 use rand_core::OsRng;
+use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::{error::Error, paths::SyncraftPaths, yggdrasil::models::{Profile, TokenInfo, TokenStatus, User}};
+use crate::{error::Error, paths::SyncraftPaths, yggdrasil::models::{Profile, YggdrasilSkinType, TokenInfo, TokenStatus, User}};
 
 #[derive(Debug, Clone)]
 pub struct DBManager {
@@ -32,6 +33,7 @@ impl DBManager {
                 email_verified      INTEGER NOT NULL DEFAULT 0,
                 verification_code   TEXT,
                 character_name      TEXT NOT NULL,
+                skin_hash           TEXT,
                 created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             )"
         ).execute(pool).await?;
@@ -46,11 +48,20 @@ impl DBManager {
             )"
         ).execute(pool).await?;
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS skins (
+                skin_hash       TEXT PRIMARY KEY,
+                skin_data       BLOB,
+                skin_type       TEXT NOT NULL DEFAULT 'default',
+                updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            )"
+        ).execute(pool).await?;
+
         Ok(())
     }
 
-    /// Create a new user using info provided with register API.
-    /// Returns `(User, verify_code)` where `verify_code` as unsigned UUID strings.
+    /// Create a new user via the register API.
+    /// Returns `(User, verification_code)` where both IDs are unsigned UUID strings.
     pub async fn create_user(
         &self,
         email: &str,
@@ -90,7 +101,7 @@ impl DBManager {
             email: email.to_string(),
             password_hash,
             email_verified: false,
-            character_name: character_name.into(),
+            character_name: character_name.into()
         };
 
         Ok((user, verification_code))
@@ -98,15 +109,35 @@ impl DBManager {
 
     pub async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, Error> {
         let user = sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, email_verified, character_name FROM users WHERE email = ?1"
+            "SELECT id, email, password_hash, email_verified, character_name, skin_hash
+            FROM users WHERE email = ?1"
         )
         .bind(email)
         .fetch_optional(&self.pool).await?;
         Ok(user)
     }
 
-    /// Create a new access token / client token pair for a user.
-    /// Old tokens are kept — validity is determined by `created_at` at lookup time.
+    /// Verify an email address using the verification code.
+    pub async fn verify_email(&self, code: &str) -> Result<Option<String>, Error> {
+        let user_id: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM users WHERE verification_code = ?1 AND email_verified = 0"
+        )
+        .bind(code)
+        .fetch_optional(&self.pool).await?;
+
+        if let Some((ref uid,)) = user_id {
+            sqlx::query(
+                "UPDATE users SET email_verified = 1, verification_code = NULL WHERE id = ?1"
+            )
+            .bind(uid)
+            .execute(&self.pool).await?;
+        }
+
+        Ok(user_id.map(|(uid,)| uid))
+    }
+
+    /// Issue a new access-token / client-token pair for a user.
+    /// Old tokens are retained — validity is determined from `created_at` at lookup time.
     /// Returns `(access_token, client_token)` as unsigned UUID strings.
     pub async fn create_tokens(&self, user_id: &str) -> Result<(String, String), Error> {
         let access_token = unsigned_uuid();
@@ -122,7 +153,7 @@ impl DBManager {
         Ok((access_token, client_token))
     }
 
-    /// Create a new `access_token` for the `client_token`.
+    /// Issue a fresh `access_token` for an existing `client_token` (token refresh).
     pub async fn refresh_token(&self, client_token: &str, user_id: &str) -> Result<String, Error> {
         let access_token = unsigned_uuid();
         sqlx::query(
@@ -135,7 +166,7 @@ impl DBManager {
         Ok(access_token)
     }
 
-    /// Get the [`TokenInfo`] by the access_token provided.
+    /// Look up [TokenInfo] by access token.
     pub async fn get_token(&self, access_token: &str) -> Result<Option<TokenInfo>, Error> {
         let row: Option<(String, String, String)> = sqlx::query_as(
             "SELECT client_token, user_id, created_at FROM access_tokens WHERE access_token = ?1"
@@ -158,7 +189,7 @@ impl DBManager {
         }
     }
 
-    /// Look up the profile (id + character_name) for a user by user id.
+    /// Look up the character profile (id + name) for a user by their user id.
     pub async fn get_profile_for_user(&self, user_id: &str) -> Result<Option<Profile>, Error> {
         sqlx::query_as::<_, Profile>(
             "SELECT id, character_name AS name FROM users WHERE id = ?1"
@@ -168,23 +199,118 @@ impl DBManager {
         .map_err(Error::Database)
     }
 
-    /// Verify an email address using the verification code.
-    pub async fn verify_email(&self, code: &str) -> Result<Option<String>, Error> {
-        let user_id: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM users WHERE verification_code = ?1 AND email_verified = 0"
+    /// Set a user's skin (upserts the skin blob and links it to the user).
+    pub async fn set_skin(&self, user_id: &str, skin_data: Vec<u8>, skin_type: YggdrasilSkinType) -> Result<(), Error> {
+        
+        let skin_hash = hash_skin_data(&skin_data);
+        
+        sqlx::query(
+            "INSERT OR IGNORE INTO skins (skin_hash, skin_data, skin_type, updated_at)
+            VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
         )
-        .bind(code)
+        .bind(&skin_hash)
+        .bind(&skin_data)
+        .bind(&skin_type.to_string())
+        .execute(&self.pool).await?;
+
+        sqlx::query(
+            "UPDATE users SET skin_hash = ?1 WHERE id = ?2"
+        )
+        .bind(&skin_hash)
+        .bind(user_id)
+        .execute(&self.pool).await?;
+
+        Ok(())
+    }
+
+    // /// Get a user's skin by user_id.
+    // pub async fn get_skin_by_user_id(&self, user_id: &str) -> Result<Option<(Vec<u8>, SyncraftSkinType)>, Error> {
+    //     let result: Option<(Vec<u8>, String)> = sqlx::query_as(
+    //         "SELECT s.skin_data, s.skin_type
+    //         FROM skins s
+    //         INNER JOIN users u ON u.skin_hash = s.skin_hash
+    //         WHERE u.id = ?1"
+    //     )
+    //     .bind(user_id)
+    //     .fetch_optional(&self.pool).await?;
+
+    //     match result {
+    //         Some((data, skin_type)) => {
+    //             Ok(Some((data, SyncraftSkinType::from(skin_type))))
+    //         }
+    //         None => Ok(None)
+    //     }
+    // }
+
+    /// Get raw skin image data by skin hash.
+    pub async fn get_skin_data(&self, skin_hash: &str) -> Result<Option<Vec<u8>>, Error> {
+        let result: Option<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT skin_data FROM skins WHERE skin_hash = ?1"
+        )
+        .bind(skin_hash)
         .fetch_optional(&self.pool).await?;
 
-        if let Some((ref uid,)) = user_id {
-            sqlx::query(
-                "UPDATE users SET email_verified = 1, verification_code = NULL WHERE id = ?1"
-            )
-            .bind(uid)
-            .execute(&self.pool).await?;
-        }
+        Ok(result.map(|(data,)| data))
+    }
 
-        Ok(user_id.map(|(uid,)| uid))
+    /// Get a user's skin metadata (hash, type), if any.
+    pub async fn get_user_skin_meta(&self, user_id: &str) -> Result<Option<(String, YggdrasilSkinType)>, Error> {
+        let result: Option<(String, String)> = sqlx::query_as(
+            "SELECT s.skin_hash, s.skin_type
+            FROM skins s
+            INNER JOIN users u ON u.skin_hash = s.skin_hash
+            WHERE u.id = ?1"
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool).await?;
+
+        match result {
+            Some((hash, skin_type)) => {
+                Ok(Some((hash, YggdrasilSkinType::from(skin_type))))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Unlink and remove a user's skin by user id.
+    pub async fn remove_skin(&self, user_id: &str) -> Result<(), Error> {
+        sqlx::query("UPDATE users SET skin_hash = NULL WHERE id = ?1")
+            .bind(user_id)
+            .execute(&self.pool).await?;
+
+        self.gc_skins().await?;
+        Ok(())
+    }
+
+    /// Delete a single access token (used by `POST /authserver/invalidate`).
+    pub async fn delete_token(&self, access_token: &str) -> Result<(), Error> {
+        sqlx::query("DELETE FROM access_tokens WHERE access_token = ?1")
+            .bind(access_token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Delete all tokens belonging to a user (used by `POST /authserver/signout`).
+    pub async fn delete_user_tokens(&self, user_id: &str) -> Result<(), Error> {
+        sqlx::query("DELETE FROM access_tokens WHERE user_id = ?1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Delete orphaned skins that are no longer referenced by any user.
+    pub async fn gc_skins(&self) -> Result<(), Error> {
+        sqlx::query(
+            "DELETE FROM skins
+             WHERE skin_hash NOT IN (
+                 SELECT DISTINCT skin_hash FROM users WHERE skin_hash IS NOT NULL
+             )"
+        )
+        .execute(&self.pool).await?;
+
+        Ok(())
     }
 }
 
@@ -201,4 +327,12 @@ fn hash_password(password: &str) -> Result<String, Error> {
         .hash_password(password.as_bytes(), &salt)
         .map_err(Error::PasswordHash)?;
     Ok(hash.to_string())
+}
+
+/// Hash the raw skin data with SHA-256, returning a hex-encoded digest.
+fn hash_skin_data(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let digest = hasher.finalize();
+    hex::encode(digest)
 }

@@ -1,9 +1,10 @@
 use lettre::{AsyncTransport, Message, message::{Mailbox, header}};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
-#[derive(Debug, Deserialize, Clone)]
+/// SMTP mailer configuration for sending verification emails.
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Mailer {
     pub smtp_host: String,
     pub smtp_port: u16,
@@ -13,6 +14,7 @@ pub struct Mailer {
 }
 
 impl Mailer {
+    /// Send a verification email via SMTP.
     pub async fn send_email(&self, to_email: &str, msg: String) -> Result<(), Error> {
         let from: Mailbox = format!("{} <{}>", self.from_name, self.username)
             .parse()
@@ -50,6 +52,7 @@ impl Mailer {
     }
 }
 
+/// Build a simple HTML verification email body containing the given link.
 pub fn verify_email_string(verify_link: String) -> String {
     format!(
 r#"<h1>Syncraft Verify</h1>
