@@ -30,3 +30,6 @@ base64 = "0.22.1"
 rsa = { version = "0.9.10", features = ["pem", "sha1"] }
 sha1 = "0.10.0"
 axum-extra = { version = "0.12.6", features = ["multipart", "typed-header"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

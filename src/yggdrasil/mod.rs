@@ -4,6 +4,9 @@ pub mod routes;
 pub mod email;
 pub mod sign;
 
+#[cfg(test)]
+mod tests;
+
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::{get, post, put}};
@@ -17,11 +20,11 @@ use crate::{error::Error, paths::SyncraftPaths, yggdrasil::{db::DBManager, email
 /// Yggdrasil authentication server configuration (serialisable from the main config).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct YggdrasilConfig {
-    server_name: Option<String>,
+    pub server_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    email: Option<Mailer>,
-    base_url: String,
-    skin_domains: Vec<String>
+    pub email: Option<Mailer>,
+    pub base_url: String,
+    pub skin_domains: Vec<String>
 }
 
 impl Default for YggdrasilConfig {

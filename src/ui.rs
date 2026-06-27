@@ -187,9 +187,44 @@ pub fn get_locale() -> Locale {
     else { Locale::En }
 }
 
-#[test]
-fn ui_test() -> Result<(), Error> {
-    let a = input(MessageKey::InputServerName)?;
-    println!("{a}");
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syncraft_protocol::{Loader, VersionInfo};
+
+    #[test]
+    fn get_locale_does_not_panic() {
+        let _ = get_locale();
+    }
+
+    #[test]
+    fn translate_simple_keys_do_not_panic() {
+        // Stateless keys should all produce non-empty output
+        assert!(!translate(MessageKey::Initializing).is_empty());
+        assert!(!translate(MessageKey::Uninitialized).is_empty());
+        assert!(!translate(MessageKey::InitOutsideMinecraftServerDirectory).is_empty());
+        assert!(!translate(MessageKey::AlreadyInitialized).is_empty());
+        assert!(!translate(MessageKey::InputServerName).is_empty());
+        assert!(!translate(MessageKey::InputVanillaVersion).is_empty());
+        assert!(!translate(MessageKey::VersionInfoConfirm).is_empty());
+        assert!(!translate(MessageKey::ContinueToInitializeConfirm).is_empty());
+        assert!(!translate(MessageKey::InitializationCancelled).is_empty());
+        assert!(!translate(MessageKey::InitializationFinished).is_empty());
+        assert!(!translate(MessageKey::CleanUpWorkSpaceConfirm).is_empty());
+    }
+
+    #[test]
+    fn translate_version_info_contains_data() {
+        let info = VersionInfo {
+            name: "MyServer".into(),
+            vanilla_version: "1.21".into(),
+            loader: Loader::Fabric {
+                loader_version: "0.16.0".into(),
+            },
+        };
+        let text = translate(MessageKey::VersionInfoDisplay(&info));
+        assert!(text.contains("MyServer"));
+        assert!(text.contains("1.21"));
+        assert!(text.contains("Fabric"));
+    }
 }

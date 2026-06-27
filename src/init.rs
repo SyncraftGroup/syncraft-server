@@ -216,7 +216,7 @@ pub fn guess_version(path: PathBuf) -> (Option<String>, Loader) {
 
     let fabric_path = lib_path.join("net").join("fabricmc");
     if fabric_path.exists() {
-        let loader_info_dir = fabric_path.join("fabricloader");
+        let loader_info_dir = fabric_path.join("fabric-loader");
         let vanilla_info_dir = fabric_path.join("intermediary");
         let mut loader_version = None;
         let mut vanilla_version = None;
@@ -245,10 +245,83 @@ pub fn guess_version(path: PathBuf) -> (Option<String>, Loader) {
     (None, Loader::Vanilla)
 }
 
-#[tokio::test]
-async fn init_test() -> Result<(), Error> {
-    let cwd = std::env::current_dir()?.join("syncraft-test-neoforge");
-    let paths = SyncraftPaths::new(cwd);
-    run(paths, true).await?;
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::guess_version;
+    use std::fs;
+    use std::path::PathBuf;
+    use syncraft_protocol::Loader;
+
+    fn make_lib(path: &PathBuf, mod_path: &str, version: &str) {
+        let dir = path.join("libraries").join(mod_path).join(version);
+        fs::create_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn guess_neoforge_version() {
+        let tmp = std::env::temp_dir().join("syncraft_test_neoforge");
+        let _ = fs::remove_dir_all(&tmp);
+        make_lib(&tmp, "net/neoforged/neoforge", "20.1.100");
+        let (ver, loader) = guess_version(tmp.clone());
+        assert_eq!(ver, Some("1.20.1".into()));
+        assert!(matches!(loader, Loader::NeoForge { .. }));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn guess_neoforge_post_26() {
+        let tmp = std::env::temp_dir().join("syncraft_test_neoforge26");
+        let _ = fs::remove_dir_all(&tmp);
+        make_lib(&tmp, "net/neoforged/neoforge", "26.1.50");
+        let (ver, loader) = guess_version(tmp.clone());
+        // main_num >= 26: no "1." prefix
+        assert_eq!(ver, Some("26.1".into()));
+        assert!(matches!(loader, Loader::NeoForge { .. }));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn guess_forge_version() {
+        let tmp = std::env::temp_dir().join("syncraft_test_forge");
+        let _ = fs::remove_dir_all(&tmp);
+        make_lib(&tmp, "net/minecraftforge/forge", "1.20.1-47.2.0");
+        let (ver, loader) = guess_version(tmp.clone());
+        assert_eq!(ver, Some("1.20.1".into()));
+        assert!(matches!(loader, Loader::Forge { .. }));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn guess_fabric_version() {
+        let tmp = std::env::temp_dir().join("syncraft_test_fabric");
+        let _ = fs::remove_dir_all(&tmp);
+        make_lib(&tmp, "net/fabricmc/fabric-loader", "0.15.11");
+        make_lib(&tmp, "net/fabricmc/intermediary", "1.20.1");
+        let (ver, loader) = guess_version(tmp.clone());
+        assert_eq!(ver, Some("1.20.1".into()));
+        assert!(matches!(loader, Loader::Fabric { .. }));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn guess_vanilla() {
+        let tmp = std::env::temp_dir().join("syncraft_test_vanilla");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let (ver, loader) = guess_version(tmp.clone());
+        assert_eq!(ver, None);
+        assert!(matches!(loader, Loader::Vanilla));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn guess_empty_dir() {
+        let tmp = std::env::temp_dir().join("syncraft_test_empty");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let (ver, loader) = guess_version(tmp.clone());
+        assert_eq!(ver, None);
+        assert!(matches!(loader, Loader::Vanilla));
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }

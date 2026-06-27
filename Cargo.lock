@@ -2739,6 +2739,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "tower",
  "uuid",
 ]
 

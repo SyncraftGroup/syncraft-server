@@ -62,3 +62,60 @@ impl YggdrasilPaths<'_> {
         self.root().join("key.pem")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn syncraft_paths_root() {
+        let paths = SyncraftPaths::new(PathBuf::from("/home/user/mcserver"));
+        assert_eq!(paths.root(), PathBuf::from("/home/user/mcserver"));
+    }
+
+    #[test]
+    fn syncraft_paths_workspace() {
+        let paths = SyncraftPaths::new(PathBuf::from("/home/user/mcserver"));
+        assert_eq!(paths.workspace(), PathBuf::from("/home/user/mcserver/syncraft"));
+    }
+
+    #[test]
+    fn syncraft_paths_config() {
+        let paths = SyncraftPaths::new(PathBuf::from("/home/user/mcserver"));
+        assert_eq!(
+            paths.config_path(),
+            PathBuf::from("/home/user/mcserver/syncraft.toml")
+        );
+    }
+
+    #[test]
+    fn syncraft_paths_data() {
+        let paths = SyncraftPaths::new(PathBuf::from("/home/user/mcserver"));
+        assert_eq!(
+            paths.data(),
+            PathBuf::from("/home/user/mcserver/syncraft/data")
+        );
+    }
+
+    #[test]
+    fn yggdrasil_paths_root() {
+        let paths = SyncraftPaths::new(PathBuf::from("/mc"));
+        let yp = paths.yggdrasil();
+        assert_eq!(yp.root(), PathBuf::from("/mc/yggdrasil"));
+    }
+
+    #[test]
+    fn yggdrasil_paths_db() {
+        let paths = SyncraftPaths::new(PathBuf::from("/mc"));
+        let yp = paths.yggdrasil();
+        assert_eq!(yp.db_path(), PathBuf::from("/mc/yggdrasil/users.db"));
+    }
+
+    #[test]
+    fn yggdrasil_paths_private_key() {
+        let paths = SyncraftPaths::new(PathBuf::from("/mc"));
+        let yp = paths.yggdrasil();
+        assert_eq!(yp.private_key(), PathBuf::from("/mc/yggdrasil/key.pem"));
+    }
+}

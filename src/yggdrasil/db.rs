@@ -32,7 +32,7 @@ impl DBManager {
                 password_hash       TEXT NOT NULL,
                 email_verified      INTEGER NOT NULL DEFAULT 0,
                 verification_code   TEXT,
-                character_name      TEXT NOT NULL,
+                character_name      TEXT NOT NULL COLLATE NOCASE UNIQUE,
                 skin_hash           TEXT,
                 created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             )"
