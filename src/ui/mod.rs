@@ -83,7 +83,7 @@ impl Ui {
 
     // ── Status (auto-boxed when multi-line) ──────────────────────
 
-    /// Neutral information.  Multi-line content is drawn in a dimmed box.
+    /// Neutral information. Multi-line content is drawn in a dimmed box.
     pub fn info(&self, key: MessageKey) {
         let msg = translate(&key);
         if msg.contains('\n') {
@@ -93,7 +93,7 @@ impl Ui {
         }
     }
 
-    /// Non-fatal warning.  Multi-line content is drawn in a yellow box.
+    /// Non-fatal warning. Multi-line content is drawn in a yellow box.
     pub fn warn(&self, key: MessageKey) {
         let msg = translate(&key);
         if msg.contains('\n') {
@@ -103,13 +103,23 @@ impl Ui {
         }
     }
 
-    /// Error (does not exit).  Multi-line content is drawn in a red box.
+    /// Error (does not exit). Multi-line content is drawn in a red box.
     pub fn error(&self, key: MessageKey) {
         let msg = translate(&key);
         if msg.contains('\n') {
             draw_box(&msg, BoxKind::Error);
         } else {
             eprintln!("{} {}", L_FAIL.red(), msg);
+        }
+    }
+
+    /// Plain texts. Multi-line content gets a plain dimmed box (no label).
+    pub fn plain(&self, key: MessageKey) {
+        let msg = translate(&key);
+        if msg.contains('\n') {
+            draw_box(&msg, BoxKind::Plain);
+        } else {
+            eprintln!("{}", msg);
         }
     }
 
@@ -127,14 +137,8 @@ impl Ui {
 
     // ── Raw output ───────────────────────────────────────────────
 
-    /// Print pre-formatted text.  Multi-line content gets a plain dimmed box
-    /// (no label); single-line text is printed dimmed.
     pub fn echo(&self, text: &str) {
-        if text.contains('\n') {
-            draw_box(text, BoxKind::Plain);
-        } else {
-            eprintln!("{}", text.dimmed());
-        }
+        eprintln!("{}", text);
     }
 }
 

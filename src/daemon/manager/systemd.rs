@@ -177,7 +177,7 @@ impl ServiceManager for Systemd {
     }
 
     fn logs(&self, paths: &SyncraftPaths) -> Result<(), Error> {
-        let log_file = paths.log_file();
+        let log_file = paths.log_file_latest();
         if !log_file.exists() {
             return Err(Error::Daemon(format!(
                 "Log file not found: {}\n\

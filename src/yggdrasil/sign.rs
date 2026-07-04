@@ -4,7 +4,7 @@ use rsa::{RsaPrivateKey, pkcs1v15::SigningKey, pkcs8::{DecodePrivateKey, EncodeP
 use sha1::Sha1;
 use tokio::fs;
 
-use crate::{error::Error, paths::SyncraftPaths};
+use crate::{error::Error, log_info, paths::SyncraftPaths};
 
 /// Load the RSA private key from disk, or generate a new 4096-bit key if none exists.
 pub async fn private_key(paths: &SyncraftPaths) -> Result<RsaPrivateKey, Error> {
@@ -15,6 +15,7 @@ pub async fn private_key(paths: &SyncraftPaths) -> Result<RsaPrivateKey, Error> 
         return Ok(key);
     }
 
+    log_info!("Generating RSA keys, this may take a while...");
     let private_key = RsaPrivateKey::new(&mut OsRng, 4096)?;
     let private_pem = private_key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)?;
     fs::write(key_file, private_pem.as_bytes()).await?;

@@ -13,7 +13,7 @@ use owo_colors::OwoColorize;
 
 use syncraft_protocol::{Loader, VersionInfo};
 
-use crate::error::Error;
+use crate::{error::Error, git::{Change, ChangeKind}};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Message key
@@ -24,7 +24,7 @@ use crate::error::Error;
 /// Parameters (like server name, version, etc.) are passed as fields.
 /// The actual text is produced by [`translate`], which handles locale
 /// selection and any rich formatting (hints, nested bullets, etc.).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum MessageKey<'a> {
     // ── Init flow ───────────────────────────────────────────────
     Initializing,
@@ -39,6 +39,9 @@ pub enum MessageKey<'a> {
     InitializationCancelled,
     InitializationFinished,
     CleanUpWorkSpaceConfirm,
+
+    // ── Git ─────────────────────────────────────────────────────
+    Changes(Vec<Change>),
 
     // ── Daemon ──────────────────────────────────────────────────
     DaemonAlreadyRunning,
@@ -127,6 +130,29 @@ pub fn translate(key: &MessageKey) -> String {
             En: "This will DELETE the entire syncraft workspace. Confirm? (y/n)",
             Zh: "这会删除整个 syncraft 工作区，确定吗？(y/n)"
         },
+
+        // ── Git ─────────────────────────────────────────────────
+        MessageKey::Changes(changes) => {
+            
+            if changes.is_empty() {
+                return msgs! {
+                    En: "No changes.",
+                    Zh: "无更改。"
+                };
+            }
+
+            let mut lines = Vec::<String>::new();
+            for change in changes {
+                match change.kind {
+                    ChangeKind::Added => lines.push(format!("{}  {}", "+".green().bold(), change.path)),
+                    ChangeKind::Deleted => lines.push(format!("{}  {}", "-".red().bold(), change.path)),
+                    ChangeKind::Modified => lines.push(format!("{}  {}", "M".yellow().bold(), change.path)),
+                    ChangeKind::Renamed => lines.push(format!("{}  {}", "R".blue().bold(), change.path)),
+                    ChangeKind::Ignored => ()
+                }
+            }
+            lines.join("\n")
+        }
 
         // ── Daemon ──────────────────────────────────────────────
         MessageKey::DaemonAlreadyRunning => msgs! {

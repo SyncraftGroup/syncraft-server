@@ -2,6 +2,7 @@ mod config;
 mod daemon;
 mod error;
 mod init;
+mod git;
 mod log;
 mod paths;
 mod ui;
@@ -11,6 +12,7 @@ use clap::{Parser, Subcommand};
 
 use crate::daemon::ServeAction;
 use crate::error::Error;
+use crate::git::GitAction;
 use crate::paths::SyncraftPaths;
 use crate::ui::Ui;
 
@@ -41,6 +43,11 @@ enum Command {
         #[command(subcommand)]
         action: Option<ServeCommand>,
     },
+    /// Git commands
+    Git {
+        #[command(subcommand)]
+        action: Option<GitCommand>
+    },
     /// Publish a new version
     Publish,
     /// Show current status
@@ -64,7 +71,7 @@ enum ServeCommand {
     /// Remove the platform service
     Uninstall,
     /// Tail daemon logs (like `docker logs -f`)
-    Logs,
+    Logs
 }
 
 impl From<ServeCommand> for ServeAction {
@@ -77,6 +84,25 @@ impl From<ServeCommand> for ServeAction {
             ServeCommand::Install => ServeAction::Install,
             ServeCommand::Uninstall => ServeAction::Uninstall,
             ServeCommand::Logs => ServeAction::Logs,
+        }
+    }
+}
+
+// ── Git subcommands ──────────────────────────────────────────────────────
+
+#[derive(Subcommand, Clone, Copy, Debug, PartialEq, Eq)]
+enum GitCommand {
+    /// Initialize a repository.
+    Init,
+    /// Get current tracking status.
+    Status
+}
+
+impl From<GitCommand> for GitAction {
+    fn from(cmd: GitCommand) -> Self {
+        match cmd {
+            GitCommand::Init => GitAction::Init,
+            GitCommand::Status => GitAction::Status
         }
     }
 }
@@ -94,16 +120,24 @@ fn main() -> Result<(), Error> {
     let paths = SyncraftPaths::new(cwd);
 
     match cli.command {
-        Command::Serve { action } => {
-            let action: Option<ServeAction> = action.map(Into::into);
-            daemon::handle_command(&paths, action.as_ref())?;
-        }
         Command::Init { force } => {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
             rt.block_on(init::run(paths, force))?;
+        }
+        Command::Serve { action } => {
+            let action: Option<ServeAction> = action.map(Into::into);
+            daemon::handle_command(&paths, action.as_ref())?;
+        }
+        Command::Git { action } => {
+            let action: Option<GitAction> = action.map(Into::into);
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+            rt.block_on(git::run(&paths, action))?;
         }
         Command::Publish => {
             // TODO: implement publish

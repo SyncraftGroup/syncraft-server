@@ -83,7 +83,7 @@ impl ServiceManager for Fallback {
         log_info!("Daemonizing (fallback / double-fork)");
 
         // ── Daemonize ────────────────────────────────────────────
-        daemonize(&paths.pid_file(), &paths.log_file());
+        daemonize(&paths.pid_file(), &paths.log_file_latest());
 
         // From here on we are the daemon grandchild.
         // No Tokio runtime has been started yet — safe to do so now.
@@ -177,7 +177,7 @@ impl ServiceManager for Fallback {
     }
 
     fn logs(&self, paths: &SyncraftPaths) -> Result<(), Error> {
-        let log_file = paths.log_file();
+        let log_file = paths.log_file_latest();
         if !log_file.exists() {
             return Err(Error::Daemon(format!(
                 "Log file not found: {}",

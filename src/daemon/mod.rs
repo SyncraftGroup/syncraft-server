@@ -48,7 +48,6 @@ use crate::yggdrasil;
 // ── CLI dispatch ─────────────────────────────────────────────────────────
 
 /// Actions that the `serve` command can take.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServeAction {
     /// Start the daemon via the platform service manager.
     Start,
@@ -124,7 +123,11 @@ async fn cmd_run(paths: &SyncraftPaths) -> Result<(), Error> {
     // Under systemd, stderr is captured by journald which strips ANSI
     // codes.  Writing to a file ensures `syncraft serve logs` can tail
     // the raw coloured output.
-    crate::log::init_file(&paths.log_file());
+    let log_file_path = paths.log_file_latest();
+    if log_file_path.exists() {
+        let _ = fs::rename(log_file_path, paths.log_file());
+    }
+    crate::log::init_file(&paths.log_file_latest());
 
     // Write PID so that fallback `stop`/`status` can find the
     // process even when started via `serve run`.

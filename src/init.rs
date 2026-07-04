@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use git2::Repository;
 use syncraft_protocol::{Loader, VersionInfo};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::git;
 use crate::paths::SyncraftPaths;
 use crate::log_debug;
 use crate::log_warn;
@@ -25,7 +25,6 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
     // ── Check for existing workspace ────────────────────────────
     if paths.workspace().exists() {
         if force && ui.confirm(MessageKey::CleanUpWorkSpaceConfirm)? {
-            ui.step(MessageKey::Initializing);
             cleanup_old_workspace(&paths).await?;
             ui.ok(MessageKey::Done);
         } else {
@@ -63,9 +62,7 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
         version_info.loader
     );
 
-    ui.echo(&crate::ui::message::translate(
-        &MessageKey::VersionInfoDisplay(&version_info),
-    ));
+    ui.plain(MessageKey::VersionInfoDisplay(&version_info));
 
     if !ui.confirm(MessageKey::VersionInfoConfirm)?
         && !ui.confirm(MessageKey::ContinueToInitializeConfirm)?
@@ -87,10 +84,7 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
     log_debug!("Config written to {}", paths.config_path().display());
 
     // ── Init git repo ───────────────────────────────────────────
-    let repo = Repository::init(paths.root())?;
-    create_gitignore(&paths).await?;
-    initial_commit(&repo)?;
-    log_debug!("Git repository initialised");
+    git::run(&paths, Some(git::GitAction::Init)).await?;
 
     ui.ok(MessageKey::InitializationFinished);
     log_debug!("Init completed successfully");
@@ -102,42 +96,6 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
 async fn write_config(paths: &SyncraftPaths, config: &Config) -> Result<(), Error> {
     let content = toml::to_string_pretty(config)?;
     tokio::fs::write(paths.config_path(), content).await?;
-    Ok(())
-}
-
-async fn create_gitignore(paths: &SyncraftPaths) -> Result<(), Error> {
-    let content = "\
-*
-!/.gitignore
-!/syncraft.toml
-
-!/syncraft/
-!/syncraft/**
-
-/syncraft/logs/
-/syncraft/logs/**
-";
-    tokio::fs::write(paths.root().join(".gitignore"), content).await?;
-    Ok(())
-}
-
-fn initial_commit(repo: &Repository) -> Result<(), git2::Error> {
-    let mut index = repo.index()?;
-    index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
-    index.write()?;
-
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-
-    let sig = git2::Signature::now("syncraft", "syncraft@local")?;
-    repo.commit(
-        Some("HEAD"),
-        &sig,
-        &sig,
-        "Initialize workspace",
-        &tree,
-        &[],
-    )?;
     Ok(())
 }
 

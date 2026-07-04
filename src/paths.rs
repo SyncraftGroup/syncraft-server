@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use chrono::Local;
 use tokio::fs;
 
 use crate::error::Error;
@@ -33,6 +34,10 @@ impl SyncraftPaths {
         self.root().join("syncraft.toml")
     }
 
+    pub fn gitignore(&self) -> PathBuf {
+        self.root().join(".gitignore")
+    }
+
     pub fn yggdrasil(&self) -> YggdrasilPaths<'_> {
         YggdrasilPaths { paths: self }
     }
@@ -49,8 +54,13 @@ impl SyncraftPaths {
         self.workspace().join("syncraft.sock")
     }
 
+    pub fn log_file_latest(&self) -> PathBuf {
+        self.workspace().join("logs").join("latest.log")
+    }
+
     pub fn log_file(&self) -> PathBuf {
-        self.workspace().join("logs").join("syncraft.log")
+        let timestamp = Local::now().format("%Y-%m-%d-%M-%H");
+        self.workspace().join("logs").join(format!("{timestamp}.log"))
     }
 }
 

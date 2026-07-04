@@ -6,7 +6,6 @@ use syncraft_protocol::{Loader, VersionInfo};
 
 use crate::{paths::SyncraftPaths, yggdrasil::YggdrasilConfig};
 use crate::log_debug;
-use crate::log_info;
 use crate::log_warn;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,7 +70,7 @@ impl Config {
             }
         };
 
-        log_info!(
+        log_debug!(
             "Config loaded: {} (MC {})",
             config.info.name,
             config.info.vanilla_version
