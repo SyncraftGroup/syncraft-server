@@ -2,7 +2,7 @@ use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::{Json, extract::{Path, Query, State}, http::StatusCode, response::{IntoResponse, Response}};
 use axum_extra::{TypedHeader, extract::Multipart, headers::{Authorization, authorization::Bearer}};
 use chrono::{Duration, Utc};
-use crate::yggdrasil::{YggdrasilState, models::{JoinRequestCache, requests::{HasJoinedQuery, JoinRequest, ProfileQuery, TextureUpload}, responses::{GameProfile, MetaResponse, YggdrasilMeta}}};
+use crate::yggdrasil::{YggdrasilState, db::unsigned_uuid, models::{JoinRequestCache, requests::{HasJoinedQuery, JoinRequest, ProfileQuery, TextureUpload}, responses::{GameProfile, MetaResponse, YggdrasilMeta}}};
 use crate::yggdrasil::email::verify_email_string;
 use crate::yggdrasil::models::{Profile, TokenStatus, YggdrasilError, requests::{AuthenticateRequest, InvalidateRequest, RefreshRequest, RegisterRequest, SignoutRequest, ValidateRequest, VerifyQuery}, responses::{AuthenticateResponse, RefreshResponse, RegisterResponse}};
 use crate::error::Error;
@@ -405,7 +405,7 @@ pub async fn has_joined(
     Query(query): Query<HasJoinedQuery>
 ) -> impl IntoResponse {
     
-    let profile =
+    let (profile, is_fake) =
     // Get cached join request
     if let Some(req) = {
         let mut guard = state.join_requests.lock().await;
@@ -414,17 +414,26 @@ pub async fn has_joined(
     // Ensure the cached request hasn't expired (5-minute window)
     && Utc::now().signed_duration_since(req.timestamp) <= Duration::minutes(5)
     // Look up profile
-    && let Ok(Some(profile)) = state.db.get_profile_for_user(&req.user_id).await
+    && let Some((profile, is_fake)) =
+        if let Ok(Some(profile)) = state.db.get_profile_for_user(&req.user_id).await {
+            Some((profile, true))
+        } else if state.config.identity_falsification {
+            // make up fake identity
+            Some((Profile {
+                id: unsigned_uuid(),
+                name: query.username.clone()
+            }, false))
+        } else { None }
     // Check if name matches
     && profile.name == req.character_name
-    && profile.name == query.username { profile }
+    && profile.name == query.username { (profile, is_fake) }
     else {
         return StatusCode::NO_CONTENT.into_response();
     };
 
     (
         StatusCode::OK,
-        Json(GameProfile::generate(state, profile).await)
+        Json(GameProfile::generate(state, profile, is_fake).await)
     ).into_response()
 }
 
@@ -546,7 +555,7 @@ pub async fn profile(
     if let Ok(Some(profile)) = state.db.get_profile_for_user(&id).await {
         (
             StatusCode::OK,
-            Json(GameProfile::generate(state, profile).await)
+            Json(GameProfile::generate(state, profile, false).await)
         ).into_response()
     } else {
         StatusCode::NO_CONTENT.into_response()

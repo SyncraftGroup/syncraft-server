@@ -14,12 +14,10 @@ impl SyncraftPaths {
     }
 
     pub async fn create_dirs(&self) -> Result<(), Error> {
-        tokio::try_join!(
-            fs::create_dir_all(self.root()),
-            fs::create_dir_all(self.workspace()),
-            fs::create_dir_all(self.data()),
-            fs::create_dir_all(self.yggdrasil().root())
-        )?;
+        fs::create_dir_all(self.root()).await?;
+        fs::create_dir_all(self.workspace()).await?;
+        fs::create_dir_all(self.data()).await?;
+        fs::create_dir_all(self.yggdrasil().root()).await?;
         Ok(())
     }
 
@@ -42,6 +40,18 @@ impl SyncraftPaths {
     pub fn data(&self) -> PathBuf {
         self.workspace().join("data")
     }
+
+    pub fn pid_file(&self) -> PathBuf {
+        self.workspace().join("syncraft.pid")
+    }
+
+    pub fn socket_path(&self) -> PathBuf {
+        self.workspace().join("syncraft.sock")
+    }
+
+    pub fn log_file(&self) -> PathBuf {
+        self.workspace().join("logs").join("syncraft.log")
+    }
 }
 
 pub struct YggdrasilPaths<'a> {
@@ -51,7 +61,7 @@ pub struct YggdrasilPaths<'a> {
 impl YggdrasilPaths<'_> {
 
     pub fn root(&self) -> PathBuf {
-        self.paths.root().join("yggdrasil")
+        self.paths.workspace().join("yggdrasil")
     }
 
     pub fn db_path(&self) -> PathBuf {
@@ -102,20 +112,20 @@ mod tests {
     fn yggdrasil_paths_root() {
         let paths = SyncraftPaths::new(PathBuf::from("/mc"));
         let yp = paths.yggdrasil();
-        assert_eq!(yp.root(), PathBuf::from("/mc/yggdrasil"));
+        assert_eq!(yp.root(), PathBuf::from("/mc/syncraft/yggdrasil"));
     }
 
     #[test]
     fn yggdrasil_paths_db() {
         let paths = SyncraftPaths::new(PathBuf::from("/mc"));
         let yp = paths.yggdrasil();
-        assert_eq!(yp.db_path(), PathBuf::from("/mc/yggdrasil/users.db"));
+        assert_eq!(yp.db_path(), PathBuf::from("/mc/syncraft/yggdrasil/users.db"));
     }
 
     #[test]
     fn yggdrasil_paths_private_key() {
         let paths = SyncraftPaths::new(PathBuf::from("/mc"));
         let yp = paths.yggdrasil();
-        assert_eq!(yp.private_key(), PathBuf::from("/mc/yggdrasil/key.pem"));
+        assert_eq!(yp.private_key(), PathBuf::from("/mc/syncraft/yggdrasil/key.pem"));
     }
 }

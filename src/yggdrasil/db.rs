@@ -9,6 +9,8 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{error::Error, paths::SyncraftPaths, yggdrasil::models::{Profile, YggdrasilSkinType, TokenInfo, TokenStatus, User}};
+use crate::log_debug;
+use crate::log_info;
 
 #[derive(Debug, Clone)]
 pub struct DBManager {
@@ -18,13 +20,18 @@ pub struct DBManager {
 impl DBManager {
     pub async fn init(paths: &SyncraftPaths) -> Result<Self, Error> {
         let db_path = paths.yggdrasil().db_path();
-        let db_url = format!("sqlite:{}", db_path.display());
-        let pool = SqlitePool::connect(&db_url).await?;
+        log_info!("Opening database at {}", db_path.display());
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await?;
         Self::init_db(&pool).await?;
+        log_info!("Database ready");
         Ok(Self { pool })
     }
 
     pub async fn init_db(pool: &SqlitePool) -> Result<(), Error> {
+        log_debug!("Running schema migrations");
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS users (
                 id                  TEXT PRIMARY KEY,
@@ -97,12 +104,14 @@ impl DBManager {
         .execute(&self.pool).await?;
 
         let user = User {
-            id: user_id,
+            id: user_id.clone(),
             email: email.to_string(),
             password_hash,
             email_verified: false,
             character_name: character_name.into()
         };
+
+        log_info!("User created: {user_id} ({email})");
 
         Ok((user, verification_code))
     }

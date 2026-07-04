@@ -43,9 +43,10 @@ pub struct GameProfile {
 }
 
 impl GameProfile {
-    pub async fn generate(state: YggdrasilState, profile: Profile) -> Self {
+    pub async fn generate(state: YggdrasilState, profile: Profile, is_fake: bool) -> Self {
         let (skin_url, skin_type) = 
-        if let Ok(Some((hash, skin_type))) = state.db.get_user_skin_meta(&profile.id).await {
+        if !is_fake
+        && let Ok(Some((hash, skin_type))) = state.db.get_user_skin_meta(&profile.id).await {
             (format!("{}/textures/{}", state.base_url, hash), skin_type)
         } else if let Ok((skin_type, url)) = mc_skin::get_skin_url(&profile.name, mc_skin::SkinSource::Mojang).await {
             (url, YggdrasilSkinType::from(skin_type))

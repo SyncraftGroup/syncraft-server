@@ -10,6 +10,8 @@ mod tests;
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::{get, post, put}};
+use crate::log_debug;
+use crate::log_info;
 use rsa::{pkcs1v15::SigningKey, pkcs8::EncodePublicKey};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -24,7 +26,8 @@ pub struct YggdrasilConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<Mailer>,
     pub base_url: String,
-    pub skin_domains: Vec<String>
+    pub skin_domains: Vec<String>,
+    pub identity_falsification: bool
 }
 
 impl Default for YggdrasilConfig {
@@ -36,7 +39,8 @@ impl Default for YggdrasilConfig {
             skin_domains: vec![
                 "example.com".into(),
                 "littleskin.cn".into()
-            ]
+            ],
+            identity_falsification: false
         }
     }
 }
@@ -58,23 +62,26 @@ pub struct YggdrasilState {
 /// Initialise the Yggdrasil subsystem: open the database, load or generate the RSA
 /// key-pair, and build the Axum router.
 pub async fn init(paths: &SyncraftPaths, config: YggdrasilConfig) -> Result<Router, Error> {
+    log_info!("Initialising Yggdrasil auth subsystem");
     paths.create_dirs().await?;
     let db = DBManager::init(paths).await?;
 
     let private_key = private_key(paths).await?;
+    log_debug!("RSA key-pair loaded");
     let public_pem = private_key
         .to_public_key()
         .to_public_key_pem(rsa::pkcs8::LineEnding::LF)?;
 
     let base_url = config.base_url.trim_end_matches("/").to_owned();
+    log_info!("Yggdrasil base URL: {base_url}");
 
     let state = YggdrasilState {
         db,
         config,
-        base_url: base_url,
+        base_url,
         join_requests: Arc::new(Mutex::new(HashMap::new())),
         sign_key: SigningKey::new(private_key),
-        public_pem
+        public_pem,
     };
 
     Ok(router(state))

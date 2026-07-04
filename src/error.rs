@@ -19,7 +19,9 @@ pub enum Error {
     #[error("{0}")]
     Sign(String),
     #[error("{0}")]
-    SkinUpload(String)
+    SkinUpload(String),
+    #[error("Daemon error: {0}")]
+    Daemon(String)
 }
 
 impl From<axum_extra::extract::multipart::MultipartError> for Error {

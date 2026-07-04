@@ -991,7 +991,7 @@ mod integration {
         let (access_token, _, user_id) = register_and_auth(&mut app).await;
 
         let skin_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test/Chara.png");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test/skin.png");
         let skin_data = std::fs::read(&skin_path).unwrap();
 
         let boundary = "testboundary";

@@ -1,6 +1,6 @@
 /target
 *.toml
 !Cargo.toml
-/syncraft-test-neoforge
+/test-neoforge
 /yggdrasil
 /test
