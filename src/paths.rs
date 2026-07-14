@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use chrono::Local;
-use tokio::fs;
+use std::fs;
 
 use crate::error::Error;
 
+#[derive(Debug, Clone)]
 pub struct SyncraftPaths {
     root: PathBuf
 }
@@ -14,11 +15,11 @@ impl SyncraftPaths {
         Self { root }
     }
 
-    pub async fn create_dirs(&self) -> Result<(), Error> {
-        fs::create_dir_all(self.root()).await?;
-        fs::create_dir_all(self.workspace()).await?;
-        fs::create_dir_all(self.data()).await?;
-        fs::create_dir_all(self.yggdrasil().root()).await?;
+    pub fn create_dirs(&self) -> Result<(), Error> {
+        fs::create_dir_all(self.root())?;
+        fs::create_dir_all(self.workspace())?;
+        fs::create_dir_all(self.data())?;
+        fs::create_dir_all(self.yggdrasil().root())?;
         Ok(())
     }
 
@@ -36,6 +37,10 @@ impl SyncraftPaths {
 
     pub fn gitignore(&self) -> PathBuf {
         self.root().join(".gitignore")
+    }
+
+    pub fn commit_msg(&self) -> PathBuf {
+        self.workspace().join("COMMIT_EDITMSG")
     }
 
     pub fn yggdrasil(&self) -> YggdrasilPaths<'_> {

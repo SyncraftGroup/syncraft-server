@@ -1,9 +1,6 @@
 //! systemd user-unit service manager.
 //!
-//! Installs a user-scoped systemd unit at
-//! `~/.config/systemd/user/syncraft.service` so the server can be managed
-//! with `systemctl --user {start,stop,status}`.
-//!
+//! Installs a user-scoped unit at `~/.config/systemd/user/syncraft.service`.
 //! No root privileges are required — everything runs in the user session.
 
 use std::fs;
@@ -18,10 +15,8 @@ use crate::ui::Ui;
 
 use super::ServiceManager;
 
-/// Name of the systemd service unit.
 const SERVICE_NAME: &str = "syncraft.service";
 
-/// systemd user-unit manager.
 pub struct Systemd;
 
 impl ServiceManager for Systemd {
@@ -94,20 +89,22 @@ impl ServiceManager for Systemd {
     fn start(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
-        super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME])
-            .map(|o| {
-                if !o.trim().is_empty() {
-                    log_info!("systemd: {}", o.trim());
-                }
-            })
-            .map_err(|e| {
-                ui.error(MessageKey::Failed { reason: e.clone() });
-                Error::Daemon(e)
-            })?;
+        if let Err(e) = super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME])
+        .map(|o| {
+            if !o.trim().is_empty() {
+                log_info!("systemd: {}", o.trim());
+        }}) {
+            if e.contains("not loaded") || e.contains("not found") {
+                Ui::get().error(MessageKey::DaemonNotInstalled);
+                return Ok(());
+            } else {
+                return Err(Error::Daemon(e));
+            }
+        }
 
         match query_pid() {
             Some(pid) => ui.ok(MessageKey::DaemonStarted { pid }),
-            None      => ui.warn(MessageKey::DaemonNotRunning),
+            None => ui.warn(MessageKey::DaemonNotRunning),
         }
         Ok(())
     }
@@ -132,7 +129,6 @@ impl ServiceManager for Systemd {
     fn status(&self, paths: &SyncraftPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
-        // Query structured state from systemd.
         let show = match super::run_cmd(
             "systemctl",
             &["--user", "show", "-p", "ActiveState", "-p", "MainPID", SERVICE_NAME],
@@ -177,6 +173,7 @@ impl ServiceManager for Systemd {
     }
 
     fn logs(&self, paths: &SyncraftPaths) -> Result<(), Error> {
+        // Tail the log file directly — preserves ANSI colours that journald strips.
         let log_file = paths.log_file_latest();
         if !log_file.exists() {
             return Err(Error::Daemon(format!(
@@ -187,8 +184,6 @@ impl ServiceManager for Systemd {
             )));
         }
 
-        // Tail the log file directly — preserves ANSI colours that
-        // journald would strip.
         use std::process::Command;
         let status = Command::new("tail")
             .args(["-f", &log_file.to_string_lossy()])
@@ -202,12 +197,6 @@ impl ServiceManager for Systemd {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Fetch the daemon PID from systemd.  Returns `None` if the service is not
-/// running or systemd is unavailable.
 fn query_pid() -> Option<u32> {
     let output = std::process::Command::new("systemctl")
         .args(["--user", "show", "-p", "MainPID", SERVICE_NAME])

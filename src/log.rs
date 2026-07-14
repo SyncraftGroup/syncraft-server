@@ -1,32 +1,5 @@
-//! Java / Python style logger — single-character levels, coloured output,
-//! continuations for multi-line messages.
-//!
-//! # Format
-//!
-//! ```text
-//! HH:MM:SS [I] : message
-//! HH:MM:SS [W] : warning text
-//! HH:MM:SS [E] : error text
-//! HH:MM:SS [D] : debug text
-//! HH:MM:SS [S] : success text
-//! ```
-//!
-//! Multi-line messages align continuations under the first line:
-//!
-//! ```text
-//! HH:MM:SS [I] : first line
-//!              : continuation
-//!              : last line
-//! ```
-//!
-//! # Usage
-//!
-//! ```ignore
-//! log_info!("Server listening on port {}", port);
-//! log_warn!("Rate limit exceeded for {}", ip);
-//! log_error!("Failed to bind socket: {}", e);
-//! log_debug!("Request took {}ms", ms);
-//! ```
+//! Single-character-level logger with coloured output and continuations
+//! for multi-line messages.
 //!
 //! Level is controlled by the `SYNCRAFT_LOG` env var (`error`, `warn`,
 //! `info`, `debug`).  Default is `info`.
@@ -40,8 +13,6 @@ use std::sync::OnceLock;
 
 use chrono::Local;
 use owo_colors::OwoColorize;
-
-// ── Level ─────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Level {
@@ -63,16 +34,15 @@ pub fn init() {
     });
 }
 
-/// Optional log file for writing colour-preserving output alongside stderr.
+/// Optional log file for colour-preserving output alongside stderr.
 ///
 /// Under systemd, stderr is captured by journald which strips ANSI codes.
-/// Setting a log file ensures the raw coloured output is preserved so that
-/// `syncraft serve logs` can tail it.  The fallback daemon skips this —
-/// stderr is already redirected to the log file via `dup2`.
+/// Writing to a file preserves raw coloured output so `syncraft serve logs`
+/// can tail it.
 static LOG_FILE: OnceLock<Mutex<fs::File>> = OnceLock::new();
 
 /// Enable dual-output to a log file.  Creates parent directories as needed.
-/// Idempotent — the first call wins, subsequent calls are ignored.
+/// Idempotent — the first call wins.
 pub fn init_file(path: &Path) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -91,16 +61,12 @@ pub(crate) fn enabled(lvl: Level) -> bool {
     FILTER.get().map_or(true, |&max| lvl <= max)
 }
 
-// ── Emit ──────────────────────────────────────────────────────────────
-
 pub(crate) fn emit(level_char: &str, color: impl owo_colors::DynColor + Copy, msg: &str) {
     let ts = Local::now().format("%H:%M:%S").to_string();
     let ts = ts.bright_black();
 
     let lines: Vec<&str> = msg.lines().collect();
 
-    // Build the formatted message in memory so we can write it to both
-    // stderr and (optionally) the log file.
     let mut formatted = String::new();
     for (i, line) in lines.iter().enumerate() {
         if i == 0 {
@@ -116,20 +82,16 @@ pub(crate) fn emit(level_char: &str, color: impl owo_colors::DynColor + Copy, ms
         }
     }
 
-    // Stderr (always).
     let mut stderr = std::io::stderr().lock();
     let _ = write!(stderr, "{}", formatted);
 
-    // Log file (optional — set via init_file).
     if let Some(mutex) = LOG_FILE.get() {
         let mut file = mutex.lock().unwrap();
         let _ = write!(file, "{}", formatted);
     }
 }
 
-// ── Macros ────────────────────────────────────────────────────────────
-
-/// Log at INFO level (blue  `I`).
+/// Log at INFO level (blue `I`).
 #[macro_export]
 macro_rules! log_info {
     ($($arg:tt)*) => {{
@@ -139,7 +101,7 @@ macro_rules! log_info {
     }};
 }
 
-/// Log at WARN level (yellow  `W`).
+/// Log at WARN level (yellow `W`).
 #[macro_export]
 macro_rules! log_warn {
     ($($arg:tt)*) => {{
@@ -149,7 +111,7 @@ macro_rules! log_warn {
     }};
 }
 
-/// Log at ERROR level (red  `E`).
+/// Log at ERROR level (red `E`).
 #[macro_export]
 macro_rules! log_error {
     ($($arg:tt)*) => {{
@@ -159,7 +121,7 @@ macro_rules! log_error {
     }};
 }
 
-/// Log at DEBUG level (magenta  `D`).
+/// Log at DEBUG level (magenta `D`).
 #[macro_export]
 macro_rules! log_debug {
     ($($arg:tt)*) => {{
@@ -169,23 +131,10 @@ macro_rules! log_debug {
     }};
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// HTTP middleware
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Axum middleware that logs every HTTP request / response in the style of
-/// the main logger:
+/// Axum middleware that logs every HTTP request / response.
 ///
 /// ```text
 /// 2026-7-4 12:00:00 [200]   GET /yggdrasil/authserver/authenticate in 0.01s
-/// ```
-///
-/// # Usage
-///
-/// ```ignore
-/// use axum::middleware;
-/// let app = Router::new()
-///     .layer(middleware::from_fn(log::http_trace));
 /// ```
 pub async fn http_trace(
     request: axum::extract::Request,
@@ -219,10 +168,8 @@ pub async fn http_trace(
         format!("in {:.2}s", latency.as_secs_f32()).bright_black(),
     );
 
-    // Stderr (always).
     eprint!("{}", line);
 
-    // Log file (optional).
     if let Some(mutex) = LOG_FILE.get() {
         let mut file = mutex.lock().unwrap();
         let _ = write!(file, "{}", line);
@@ -230,10 +177,6 @@ pub async fn http_trace(
 
     response
 }
-
-// ═══════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {

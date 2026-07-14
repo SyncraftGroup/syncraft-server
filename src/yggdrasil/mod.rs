@@ -61,9 +61,9 @@ pub struct YggdrasilState {
 
 /// Initialise the Yggdrasil subsystem: open the database, load or generate the RSA
 /// key-pair, and build the Axum router.
-pub async fn init(paths: &SyncraftPaths, config: YggdrasilConfig) -> Result<Router, Error> {
+pub async fn init(paths: &SyncraftPaths, config: &YggdrasilConfig) -> Result<Router, Error> {
     log_info!("Initialising Yggdrasil auth subsystem");
-    paths.create_dirs().await?;
+    paths.create_dirs()?;
     let db = DBManager::init(paths).await?;
 
     let private_key = private_key(paths).await?;
@@ -77,7 +77,7 @@ pub async fn init(paths: &SyncraftPaths, config: YggdrasilConfig) -> Result<Rout
 
     let state = YggdrasilState {
         db,
-        config,
+        config: config.clone(),
         base_url,
         join_requests: Arc::new(Mutex::new(HashMap::new())),
         sign_key: SigningKey::new(private_key),

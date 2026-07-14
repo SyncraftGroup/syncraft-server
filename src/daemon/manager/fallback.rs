@@ -1,26 +1,15 @@
-//! Fallback daemon manager for systems without a native service manager.
+//! Fallback daemon manager using the classic double-fork pattern.
 //!
-//! Implements the classic double-fork daemonization pattern:
-//!
-//! 1. Validate workspace, check no existing daemon.
-//! 2. `fork()` → parent exits.
-//! 3. `setsid()` → child becomes session leader.
-//! 4. `fork()` again → grandchild can never acquire a controlling terminal.
-//! 5. `chdir("/")`, reset umask, redirect stdio to log file.
-//! 6. Write PID file.
-//! 7. Start a fresh Tokio runtime and run the server.
-//!
-//! # Independence from systemd
-//!
-//! This module is **only** loaded and used when systemd is not available.
-//! When the server runs under systemd, `serve run` is the entry point —
-//! no fork / daemonize / PID-file code is ever touched.
+//! Only used when systemd is not available. When running under systemd,
+//! `serve run` is the entry point — no fork / daemonize code is touched.
 
 use std::fs;
 use std::io;
 use std::os::unix::io::AsRawFd;
+use std::sync::Arc;
 
 use crate::config::Config;
+use crate::daemon::SyncraftServer;
 use crate::log_error;
 use crate::log_info;
 use crate::log_warn;
@@ -31,7 +20,6 @@ use crate::ui::Ui;
 
 use super::ServiceManager;
 
-/// Fallback manager — always says it's available.
 pub struct Fallback;
 
 impl ServiceManager for Fallback {
@@ -40,7 +28,7 @@ impl ServiceManager for Fallback {
     }
 
     fn is_available(&self) -> bool {
-        true // Last resort, always available on Unix.
+        true
     }
 
     fn install(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
@@ -56,12 +44,11 @@ impl ServiceManager for Fallback {
 
     /// Daemonize the process and run the server.
     ///
-    /// **This function does not return** on success — the parent exits,
-    /// and the grandchild continues into [`crate::daemon::run_server`].
+    /// **This function does not return** on success — the parent exits
+    /// and the grandchild runs the server.
     fn start(&self, paths: &SyncraftPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
-        // ── Pre-flight checks ────────────────────────────────────
         let config =
         if let Some(config) = Config::load(paths) { config }
         else {
@@ -82,17 +69,18 @@ impl ServiceManager for Fallback {
 
         log_info!("Daemonizing (fallback / double-fork)");
 
-        // ── Daemonize ────────────────────────────────────────────
         daemonize(&paths.pid_file(), &paths.log_file_latest());
 
-        // From here on we are the daemon grandchild.
-        // No Tokio runtime has been started yet — safe to do so now.
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
 
-        rt.block_on(crate::daemon::run_server(paths, config))
+        let server = rt
+            .block_on(async { SyncraftServer::new(paths, config).await })
+            .map_err(|e| Error::Daemon(format!("Failed to create server: {}", e)))?;
+        let server = Arc::new(server);
+        rt.block_on(server.run())
     }
 
     fn stop(&self, paths: &SyncraftPaths) -> Result<(), Error> {
@@ -198,52 +186,41 @@ impl ServiceManager for Fallback {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Daemonization (Linux double-fork)
-// ═══════════════════════════════════════════════════════════════════════════
-
 /// Double-fork the current process into a proper daemon.
 fn daemonize(pid_file: &std::path::Path, log_file: &std::path::Path) {
-    // Ensure log directory exists before we lose cwd.
     if let Some(parent) = log_file.parent() {
         let _ = fs::create_dir_all(parent);
     }
 
-    // ── First fork ──────────────────────────────────────────────
     match unsafe { libc::fork() } {
         -1 => {
             log_error!("First fork failed: {}", io::Error::last_os_error());
             std::process::exit(1);
         }
-        0 => { /* child continues */ }
-        _ => { /* parent exits */ std::process::exit(0); }
+        0 => {}
+        _ => std::process::exit(0),
     }
 
-    // ── Create new session ──────────────────────────────────────
     if unsafe { libc::setsid() } == -1 {
         log_error!("setsid failed: {}", io::Error::last_os_error());
         std::process::exit(1);
     }
 
-    // ── Second fork ─────────────────────────────────────────────
     match unsafe { libc::fork() } {
         -1 => {
             log_error!("Second fork failed: {}", io::Error::last_os_error());
             std::process::exit(1);
         }
-        0 => { /* grandchild continues */ }
-        _ => { /* first child exits */ std::process::exit(0); }
+        0 => {}
+        _ => std::process::exit(0),
     }
 
-    // ── Write PID file ──────────────────────────────────────────
     let pid = std::process::id();
     let _ = fs::write(pid_file, pid.to_string());
 
-    // ── chdir("/"), reset umask ─────────────────────────────────
     let _ = std::env::set_current_dir("/");
     unsafe { libc::umask(0o022); }
 
-    // ── Redirect stdin / stdout / stderr to log file ────────────
     redirect_stdio(log_file);
 
     log_info!("Daemon started (PID {})", pid);
@@ -266,9 +243,6 @@ fn redirect_stdio(log_file: &std::path::Path) {
         libc::dup2(fd, libc::STDERR_FILENO);
     }
     let _ = file;
-
-    // The logger will now write to the log file via stderr.
-    // No manual write needed.
 }
 
 /// Return `true` if the PID file references an alive process.

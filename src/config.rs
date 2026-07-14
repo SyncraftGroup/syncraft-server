@@ -1,18 +1,29 @@
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use path_clean::PathClean;
+use serde::{Deserialize, Deserializer, Serialize};
 
-use syncraft_protocol::{Loader, VersionInfo};
+use syncraft_protocol::{Loader, SyncMode, VersionInfo};
 
 use crate::{paths::SyncraftPaths, yggdrasil::YggdrasilConfig};
 use crate::log_debug;
 use crate::log_warn;
 
+fn deserialize_clean_path<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
+where D: Deserializer<'de> {
+    let path = PathBuf::deserialize(deserializer)?;
+    Ok(path.clean())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncObject {
+    #[serde(deserialize_with = "deserialize_clean_path")]
     pub path: PathBuf,
     pub to: PathBuf,
-    pub is_mods_dir: Option<bool>
+    #[serde(default)]
+    pub mode: SyncMode,
+    #[serde(default)]
+    pub is_mod_dir: bool
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,16 +102,6 @@ mod tests {
         assert_eq!(config.info.name, "<name>");
         assert_eq!(config.info.vanilla_version, "0.00.0");
         assert!(config.sync.is_empty());
-    }
-
-    #[test]
-    fn sync_object_defaults() {
-        let obj = SyncObject {
-            path: PathBuf::from("mods"),
-            to: PathBuf::from("mods"),
-            is_mods_dir: None,
-        };
-        assert!(obj.is_mods_dir.is_none());
     }
 
     #[tokio::test]

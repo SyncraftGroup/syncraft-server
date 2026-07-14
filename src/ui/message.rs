@@ -1,23 +1,18 @@
 //! User-facing message catalog with i18n support (English / Chinese).
 //!
-//! Every string the user sees goes through [`MessageKey`].  The [`Ui`](super::Ui)
+//! Every user-visible string goes through [`MessageKey`].  The [`Ui`](super::Ui)
 //! methods call [`translate`] internally — callers never pass raw strings.
 //!
-//! # Adding a new message
-//!
-//! 1. Add a variant to [`MessageKey`].
-//! 2. Add the match arm in [`translate`] for both `En` and `Zh`.
-//! 3. Reference it via `MessageKey::YourVariant`.
+//! To add a message: add a variant to [`MessageKey`], then add both `En` and
+//! `Zh` arms in [`translate`].
+
+use std::process::ExitStatus;
 
 use owo_colors::OwoColorize;
 
 use syncraft_protocol::{Loader, VersionInfo};
 
-use crate::{error::Error, git::{Change, ChangeKind}};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Message key
-// ═══════════════════════════════════════════════════════════════════════════
+use crate::{error::Error, git::Change};
 
 /// Every user-facing message is identified by a variant of this enum.
 ///
@@ -26,7 +21,7 @@ use crate::{error::Error, git::{Change, ChangeKind}};
 /// selection and any rich formatting (hints, nested bullets, etc.).
 #[derive(Debug)]
 pub enum MessageKey<'a> {
-    // ── Init flow ───────────────────────────────────────────────
+    // Init
     Initializing,
     Uninitialized,
     InitOutsideMinecraftServerDirectory,
@@ -40,10 +35,17 @@ pub enum MessageKey<'a> {
     InitializationFinished,
     CleanUpWorkSpaceConfirm,
 
-    // ── Git ─────────────────────────────────────────────────────
+    // Git
     Changes(Vec<Change>),
+    FailedToLaunchEditor(String),
+    EditorExitedUnexpectedly(String, ExitStatus),
+    PublishAbortedEmptyUpdate,
+    PublishAbortedEmptyMessage,
+    PublishConfirm,
+    PublishCancelled,
+    Published(String),
 
-    // ── Daemon ──────────────────────────────────────────────────
+    // Daemon
     DaemonAlreadyRunning,
     DaemonStarted { pid: u32 },
     DaemonStopped,
@@ -56,19 +58,19 @@ pub enum MessageKey<'a> {
     },
     DaemonIpcError { reason: String },
     DaemonStalePid { pid: String, pid_file: String },
+    DaemonNotRunningPublish,
+    DaemonNotInstalled,
     DaemonInstallUnsupported,
 
-    // ── Generic ─────────────────────────────────────────────────
+    // Generic
     Done,
     Failed { reason: String },
+    Text(String)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Translation entry point
-// ═══════════════════════════════════════════════════════════════════════════
 pub fn translate(key: &MessageKey) -> String {
     match key {
-        // ── Init ────────────────────────────────────────────────
+        // Init
         MessageKey::Initializing => msgs! {
             En: "Initializing workspace...",
             Zh: "初始化工作区..."
@@ -131,9 +133,9 @@ pub fn translate(key: &MessageKey) -> String {
             Zh: "这会删除整个 syncraft 工作区，确定吗？(y/n)"
         },
 
-        // ── Git ─────────────────────────────────────────────────
+        // Git
         MessageKey::Changes(changes) => {
-            
+
             if changes.is_empty() {
                 return msgs! {
                     En: "No changes.",
@@ -143,18 +145,64 @@ pub fn translate(key: &MessageKey) -> String {
 
             let mut lines = Vec::<String>::new();
             for change in changes {
-                match change.kind {
-                    ChangeKind::Added => lines.push(format!("{}  {}", "+".green().bold(), change.path)),
-                    ChangeKind::Deleted => lines.push(format!("{}  {}", "-".red().bold(), change.path)),
-                    ChangeKind::Modified => lines.push(format!("{}  {}", "M".yellow().bold(), change.path)),
-                    ChangeKind::Renamed => lines.push(format!("{}  {}", "R".blue().bold(), change.path)),
-                    ChangeKind::Ignored => ()
+                match change {
+                    Change::Added(path) => lines.push(format!("{}  {}", "+".green().bold(), path.to_string_lossy())),
+                    Change::Deleted(path) => lines.push(format!("{}  {}", "-".red().bold(), path.to_string_lossy())),
+                    Change::Modified(path) => lines.push(format!("{}  {}", "M".yellow().bold(), path.to_string_lossy())),
+                    Change::Renamed { from, to } => lines.push(
+                        format!("{}  {} -> {}", "R".blue().bold(), from.to_string_lossy(), to.to_string_lossy())
+                    ),
+                    Change::Ignored => ()
                 }
             }
             lines.join("\n")
         }
+        MessageKey::FailedToLaunchEditor(editor) => {
+            let reason = msgs! {
+                En: format!("Failed to launch editor '{}'.", editor),
+                Zh: format!("无法打开编辑器 '{}'。", editor)
+            };
+            let hint = msgs! {
+                En: "Set the SYNCRAFT_EDITOR environment variable to a valid executable.",
+                Zh: "请在环境变量 SYNCRAFT_EDITOR 中配置可用的编辑器。"
+            };
+            format_reason_hint(&reason, &hint)
+        }
+        MessageKey::EditorExitedUnexpectedly(editor, status) => {
+            format!("Editor '{}' exited with status {}.", editor, status)
+        }
+        MessageKey::PublishAbortedEmptyUpdate => {
+            msgs! {
+                En: "Publish aborted (an empty update).",
+                Zh: "未发布更新（未检测到更新）。"
+            }
+        }
+        MessageKey::PublishAbortedEmptyMessage => {
+            msgs! {
+                En: "Publish aborted (empty update message).",
+                Zh: "未发布更新（空更新信息）。"
+            }
+        }
+        MessageKey::PublishConfirm => {
+            msgs! {
+                En: "Confirm to publish? (y/n)",
+                Zh: "确认发布吗？(y/n)"
+            }
+        }
+        MessageKey::PublishCancelled => {
+            msgs! {
+                En: "Publishing cancelled.",
+                Zh: "已取消发布更新。"
+            }
+        }
+        MessageKey::Published(hash) => {
+            msgs! {
+                En: format!("Published an update with hash '{}'.", hash),
+                Zh: format!("已发布更新：'{}'", hash)
+            }
+        }
 
-        // ── Daemon ──────────────────────────────────────────────
+        // Daemon
         MessageKey::DaemonAlreadyRunning => msgs! {
             En: "Syncraft daemon is already running.",
             Zh: "Syncraft 守护进程已在运行中。"
@@ -176,24 +224,17 @@ pub fn translate(key: &MessageKey) -> String {
             let label_pid     = msgs! { En: "PID",     Zh: "进程"  };
             let label_uptime  = msgs! { En: "Uptime",  Zh: "运行"  };
             let label_addr    = msgs! { En: "Address", Zh: "地址"  };
-            let label_mgr     = msgs! { En: "Manager", Zh: "管理器" };
+            let label_mgr     = msgs! { En: "Manager", Zh: "管理" };
 
             let running = msgs! { En: "Running", Zh: "运行中" };
             let uptime = format_uptime(*uptime_secs);
 
-            // Align after the widest label + " : " (8 chars for CJK labels).
-            // Use a fixed visual width so columns line up.
-            let pad = |label: &str| {
-                let w = console::measure_text_width(label);
-                format!("{}:{}", label, " ".repeat(8usize.saturating_sub(w)))
-            };
-
             vec![
-                format!("  {}  {}", pad(&label_status).italic(), running.bold()),
-                format!("  {}  {}", pad(&label_pid).italic(),    pid.bold()),
-                format!("  {}  {}", pad(&label_uptime).italic(), uptime.bold()),
-                format!("  {}  {}", pad(&label_addr).italic(),   address.bold()),
-                format!("  {}  {}", pad(&label_mgr).italic(),    manager.bold()),
+                format!("{}: {}", label_status.italic(), running.bold()),
+                format!("{}: {}", label_pid.italic(),    pid.bold()),
+                format!("{}: {}", label_uptime.italic(), uptime.bold()),
+                format!("{}: {}", label_addr.italic(),   address.bold()),
+                format!("{}: {}", label_mgr.italic(),    manager.bold()),
             ]
             .join("\n")
         }
@@ -206,12 +247,27 @@ pub fn translate(key: &MessageKey) -> String {
                 pid, pid_file
             )
         },
+        MessageKey::DaemonNotRunningPublish => msgs! {
+            En: "Syncraft daemon is not running.\nStart it first with 'syncraft serve start', then try again.",
+            Zh: "Syncraft 守护进程未运行。\n请先执行 'syncraft serve start' 启动守护进程，然后重试。"
+        },
+        MessageKey::DaemonNotInstalled => {
+            let reason = msgs! {
+                En: "Syncraft daemon is not installed.",
+                Zh: "Syncraft 守护进程尚未安装。"
+            };
+            let hint = msgs! {
+                En: "Run 'syncraft serve install' first to set up the daemon as a systemd service.",
+                Zh: "请先执行 'syncraft serve install' 将守护进程安装为 systemd 服务。"
+            };
+            format_reason_hint(&reason, &hint)
+        },
         MessageKey::DaemonInstallUnsupported => msgs! {
             En: "Service installation requires systemd (Linux).\nUse 'serve start' for fallback daemon mode or 'serve run' for foreground.",
             Zh: "服务安装需要 systemd (Linux)。\n使用 'serve start' 以 fallback 模式运行，或 'serve run' 以前台模式运行。"
         },
 
-        // ── Generic ─────────────────────────────────────────────
+        // Generic
         MessageKey::Done => msgs! {
             En: "Done.",
             Zh: "完成。"
@@ -219,17 +275,14 @@ pub fn translate(key: &MessageKey) -> String {
         MessageKey::Failed { reason } => {
             format!("Failed: {}", reason)
         }
+        MessageKey::Text(text) => text.to_string()
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Locale
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Locale {
     En,
-    Zh,
+    Zh
 }
 
 pub fn get_locale() -> Locale {
@@ -240,10 +293,6 @@ pub fn get_locale() -> Locale {
         Locale::En
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Macros & helpers
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Shorthand for a two-locale match.
 ///
@@ -260,13 +309,12 @@ macro_rules! msgs {
 }
 pub(crate) use msgs;
 
-/// Format a reason+hint pair.  The hint is shown with a `→` arrow.
+/// Format a reason+hint pair with a `→` arrow.
 fn format_reason_hint(reason: &str, hint: &str) -> String {
     format!("{}\n  → {}", reason, hint)
 }
 
-/// Format a duration in seconds into a human-readable string like
-/// "2 hours, 30 minutes" or "45 seconds".
+/// Format a duration in seconds into a human-readable string.
 fn format_uptime(secs: u64) -> String {
     let d = secs / 86400;
     let h = (secs % 86400) / 3600;
@@ -323,11 +371,7 @@ fn format_version_info(info: &VersionInfo) -> String {
     .join("\n")
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Interactive prompts (thin wrappers around `inquire`)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Prompt the user for text input.  Returns the entered text.
+/// Prompt the user for text input.
 pub fn prompt_input(prompt: &str) -> Result<String, Error> {
     inquire::Text::new(prompt)
         .prompt()
@@ -340,10 +384,6 @@ pub fn prompt_confirm(prompt: &str) -> Result<bool, Error> {
         .prompt()
         .map_err(|e| Error::UI(e.to_string()))
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {

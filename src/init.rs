@@ -10,8 +10,9 @@ use crate::log_debug;
 use crate::log_warn;
 use crate::ui::message::MessageKey;
 use crate::ui::Ui;
+use crate::yggdrasil;
 
-pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
+pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
     log_debug!("Init started (force={force})");
 
     let ui = Ui::get();
@@ -22,10 +23,9 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
         return Ok(());
     }
 
-    // ── Check for existing workspace ────────────────────────────
     if paths.workspace().exists() {
         if force && ui.confirm(MessageKey::CleanUpWorkSpaceConfirm)? {
-            cleanup_old_workspace(&paths).await?;
+            cleanup_old_workspace(&paths)?;
             ui.ok(MessageKey::Done);
         } else {
             ui.error(MessageKey::AlreadyInitialized);
@@ -33,7 +33,6 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
         }
     }
 
-    // ── Collect info ────────────────────────────────────────────
     ui.step(MessageKey::Initializing);
 
     let name = ui.input(MessageKey::InputServerName)?;
@@ -71,35 +70,36 @@ pub async fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
         return Ok(());
     }
 
-    // ── Create directories ──────────────────────────────────────
-    paths.create_dirs().await?;
+    paths.create_dirs()?;
     log_debug!("Workspace directories created");
 
-    // ── Write config ────────────────────────────────────────────
     let config = Config {
         info: version_info,
         ..Default::default()
     };
-    write_config(&paths, &config).await?;
+    write_config(&paths, &config)?;
     log_debug!("Config written to {}", paths.config_path().display());
 
-    // ── Init git repo ───────────────────────────────────────────
-    git::run(&paths, Some(git::GitAction::Init)).await?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+    let _ = rt.block_on(yggdrasil::init(&paths, &config.yggdrasil));
+
+    git::run(paths, Some(git::GitAction::Init))?;
 
     ui.ok(MessageKey::InitializationFinished);
     log_debug!("Init completed successfully");
     Ok(())
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-async fn write_config(paths: &SyncraftPaths, config: &Config) -> Result<(), Error> {
+fn write_config(paths: &SyncraftPaths, config: &Config) -> Result<(), Error> {
     let content = toml::to_string_pretty(config)?;
-    tokio::fs::write(paths.config_path(), content).await?;
+    std::fs::write(paths.config_path(), content)?;
     Ok(())
 }
 
-async fn cleanup_old_workspace(paths: &SyncraftPaths) -> Result<(), Error> {
+fn cleanup_old_workspace(paths: &SyncraftPaths) -> Result<(), Error> {
     let to_remove: [PathBuf; 4] = [
         paths.workspace(),
         paths.config_path(),
@@ -109,9 +109,9 @@ async fn cleanup_old_workspace(paths: &SyncraftPaths) -> Result<(), Error> {
     for path in &to_remove {
         if path.exists() {
             if path.is_dir() {
-                tokio::fs::remove_dir_all(path).await?;
+                std::fs::remove_dir_all(path)?;
             } else {
-                tokio::fs::remove_file(path).await?;
+                std::fs::remove_file(path)?;
             }
         }
     }
@@ -125,12 +125,10 @@ fn looks_like_mc_server_dir(cwd: &Path) -> Result<bool, Error> {
         && cwd.join("libraries").exists())
 }
 
-// ── Version guessing ─────────────────────────────────────────────────────
-
+/// Guess the Minecraft version and mod loader from the server directory.
 pub fn guess_version(path: PathBuf) -> (Option<String>, Loader) {
     let lib_path = path.join("libraries");
 
-    // NeoForge
     let neoforge_path = lib_path.join("net").join("neoforged");
     if neoforge_path.exists() {
         let info_dir = neoforge_path.join("neoforge");
@@ -147,7 +145,6 @@ pub fn guess_version(path: PathBuf) -> (Option<String>, Loader) {
         }
     }
 
-    // Forge
     let forge_path = lib_path.join("net").join("minecraftforge");
     if forge_path.exists() {
         let info_dir = forge_path.join("forge");
@@ -169,7 +166,6 @@ pub fn guess_version(path: PathBuf) -> (Option<String>, Loader) {
         }
     }
 
-    // Fabric
     let fabric_path = lib_path.join("net").join("fabricmc");
     if fabric_path.exists() {
         let mut loader_version = None;
@@ -221,10 +217,6 @@ fn parse_neoforge(version_str: &str) -> Option<(Option<String>, Loader)> {
         },
     ))
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {

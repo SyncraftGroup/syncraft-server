@@ -1,72 +1,40 @@
-//! Daemon lifecycle management for the syncraft server.
-//!
-//! # Architecture
-//!
-//! ```
-//! CLI (main.rs)
-//!   │
-//!   └─ handle_command()          ← dispatch table
-//!        │
-//!        ├─ manager::detect()    ← pick systemd or fallback
-//!        │
-//!        ├─ manager.start()      ← platform-specific
-//!        ├─ manager.stop()
-//!        ├─ manager.status()
-//!        ├─ manager.install()
-//!        ├─ manager.uninstall()
-//!        │
-//!        └─ cmd_run()            ← foreground (common to both)
-//!             └─ run_server()    ← axum + IPC + signals
-//! ```
-//!
-//! **Key separation:** When systemd manages the process it calls `serve run`
-//! directly — the double-fork / PID-file / log-redirection code in
-//! [`manager::fallback`] is never touched.  Conversely, the fallback path
-//! never touches systemd units.  The two are completely independent at
-//! runtime and share only `run_server()`.
-
 mod manager;
+mod sync;
 pub(crate) mod ipc;
+pub(crate) mod http;
 
+use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::log_error;
+use crate::daemon::sync::{file_mapping, hash_mapping};
 use crate::log_info;
 
-use axum::{middleware, Router};
-use tokio::net::TcpListener;
-use tokio::sync::Notify;
-
+use blake3::Hash;
+use syncraft_protocol::SyncFile;
+use tokio::sync::{Mutex, Notify};
+use tokio::try_join;
 use crate::config::Config;
 use crate::error::Error;
 use crate::paths::SyncraftPaths;
 use crate::ui::message::MessageKey;
 use crate::ui::Ui;
-use crate::yggdrasil;
-
-// ── CLI dispatch ─────────────────────────────────────────────────────────
 
 /// Actions that the `serve` command can take.
 pub enum ServeAction {
-    /// Start the daemon via the platform service manager.
     Start,
-    /// Stop a running daemon.
     Stop,
-    /// Query daemon status.
     Status,
     /// Run the server in the foreground (dev / debug / systemd ExecStart).
     Run,
-    /// Install the server as a platform service.
     Install,
-    /// Remove the platform service.
     Uninstall,
     /// Tail daemon logs (systemd journal or log file).
     Logs,
 }
 
-/// Entry point called from `main()`. Routes to the appropriate handler
-/// using the best available service manager.
+/// Route to the appropriate handler using the best available service manager.
 ///
 /// `action` is `None` when no subcommand is given; defaults to `Start`.
 pub fn handle_command(
@@ -76,7 +44,6 @@ pub fn handle_command(
     let action = action.unwrap_or(&ServeAction::Start);
 
     match action {
-        // ── `run` is manager-independent ────────────────────────
         ServeAction::Run => {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -85,7 +52,6 @@ pub fn handle_command(
             rt.block_on(cmd_run(paths))
         }
 
-        // ── Everything else delegates to the service manager ────
         _ => {
             let mgr = manager::detect();
             match action {
@@ -101,16 +67,9 @@ pub fn handle_command(
     }
 }
 
-// ── Foreground runner (common to systemd and fallback) ───────────────────
-
-/// Run the server in the foreground.
+/// Run the server in the foreground — no daemonization.
 ///
-/// This is used by:
-/// - `syncraft serve run` (manual dev/debug)
-/// - systemd `ExecStart=syncraft serve run`
-///
-/// It contains **no** daemonization logic — the caller is responsible
-/// for process lifecycle (terminal, systemd, etc.).
+/// Used by `syncraft serve run` and systemd `ExecStart=`.
 async fn cmd_run(paths: &SyncraftPaths) -> Result<(), Error> {
     let config =
     if let Some(config) = Config::load(paths) { config }
@@ -119,104 +78,80 @@ async fn cmd_run(paths: &SyncraftPaths) -> Result<(), Error> {
         return Ok(());
     };
 
-    // Enable colour-preserving log output alongside stderr.
-    // Under systemd, stderr is captured by journald which strips ANSI
-    // codes.  Writing to a file ensures `syncraft serve logs` can tail
-    // the raw coloured output.
+    // Rotate the old log file so `serve logs` always tails the latest session.
     let log_file_path = paths.log_file_latest();
     if log_file_path.exists() {
         let _ = fs::rename(log_file_path, paths.log_file());
     }
     crate::log::init_file(&paths.log_file_latest());
 
-    // Write PID so that fallback `stop`/`status` can find the
-    // process even when started via `serve run`.
+    // Write PID so fallback `stop`/`status` can find the process.
     let pid = std::process::id();
     let _ = fs::write(paths.pid_file(), pid.to_string());
     log_info!("Server starting in foreground (PID {})", pid);
 
-    run_server(paths, config).await
+    let server = Arc::new(SyncraftServer::new(paths, config).await?);
+    server.run().await
 }
 
-// ── Server core ──────────────────────────────────────────────────────────
+pub struct SyncraftServer {
+    paths: SyncraftPaths,
+    config: Config,
+    shutdown: Arc<Notify>,
+    file_mapping: Mutex<HashMap<PathBuf, SyncFile>>,
+    hash_mapping: Mutex<HashMap<Hash, PathBuf>>
+}
 
-/// Start the axum HTTP server with an IPC control socket.
-///
-/// Listens on `0.0.0.0:3000` for HTTP traffic and on a Unix domain
-/// socket for control commands.  Graceful shutdown is triggered by:
-/// - An IPC `stop` command.
-/// - SIGINT / Ctrl+C.
-/// - SIGTERM (sent by systemd during `systemctl stop`).
-pub(crate) async fn run_server(paths: &SyncraftPaths, config: Config) -> Result<(), Error> {
-    let app = Router::new()
-        .nest(
-            "/yggdrasil",
-            yggdrasil::init(paths, config.yggdrasil).await?,
-        )
-        .layer(middleware::from_fn(crate::log::http_trace));
+impl SyncraftServer {
 
-    let address = format!("{}:{}", config.network.host.trim(), config.network.port);
-    let listener = TcpListener::bind(&address).await.map_err(|e| {
-        Error::Daemon(format!("Failed to bind HTTP listener: {}", e))
-    })?;
-    log_info!("HTTP server listening on {address}");
+    pub(crate) async fn new(paths: &SyncraftPaths, config: Config) -> Result<Self, Error> {
 
-    // A single `Notify` coordinates shutdown across IPC, signals, and the
-    // HTTP server.
-    let shutdown = Arc::new(Notify::new());
+        let paths = paths.clone();
+        let shutdown = Arc::new(Notify::new());
+        let file_mapping = file_mapping(&config).await?;
+        let hash_mapping = Mutex::new(hash_mapping(&file_mapping));
+        let file_mapping = Mutex::new(file_mapping);
 
-    // ── IPC server ──────────────────────────────────────────────
-    let ipc_shutdown = Arc::clone(&shutdown);
-    let ipc_socket = paths.socket_path();
-    let ipc_handle = tokio::spawn(async move {
-        if let Err(e) = ipc::run_server(&ipc_socket, ipc_shutdown).await {
-            log_error!("IPC server error: {}", e);
-        }
-    });
+        Ok(Self { paths, config, shutdown, file_mapping, hash_mapping })
+    }
 
-    // ── HTTP server + graceful shutdown ─────────────────────────
-    let http_shutdown = Arc::clone(&shutdown);
-    let http_handle = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                http_shutdown.notified().await;
-            })
-            .await
-            .map_err(|e| Error::Daemon(format!("HTTP server error: {}", e)))
-    });
+    pub(crate) async fn run(self: Arc<Self>) -> Result<(), Error> {
 
-    // ── Signal handlers ─────────────────────────────────────────
-    let signal_shutdown = Arc::clone(&shutdown);
+        self.shutdown_handlers();
 
-    // Ctrl+C (SIGINT)
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        log_info!("SIGINT received, shutting down");
-        signal_shutdown.notify_waiters();
-    });
+        try_join!(
+            self.run_http(),
+            Arc::clone(&self).run_ipc()
+        )?;
 
-    // SIGTERM (sent by systemd `systemctl stop`, `kill`, etc.)
-    let term_shutdown = Arc::clone(&shutdown);
-    tokio::spawn(async move {
-        let mut stream = match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        ) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        stream.recv().await;
-        log_info!("SIGTERM received, shutting down");
-        term_shutdown.notify_waiters();
-    });
+        log_info!("Server shutdown complete");
 
-    // ── Wait ────────────────────────────────────────────────────
-    let _ = tokio::join!(ipc_handle, http_handle);
+        let _ = fs::remove_file(self.paths.socket_path());
+        let _ = fs::remove_file(self.paths.pid_file());
 
-    log_info!("Server shutdown complete");
+        Ok(())
+    }
 
-    // ── Cleanup ─────────────────────────────────────────────────
-    let _ = fs::remove_file(paths.socket_path());
-    let _ = fs::remove_file(paths.pid_file());
+    fn shutdown_handlers(&self) {
 
-    Ok(())
+        let signal_shutdown = self.shutdown.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            log_info!("SIGINT received, shutting down");
+            signal_shutdown.notify_waiters();
+        });
+
+        let term_shutdown = self.shutdown.clone();
+        tokio::spawn(async move {
+            let mut stream = match tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::terminate(),
+            ) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            stream.recv().await;
+            log_info!("SIGTERM received, shutting down");
+            term_shutdown.notify_waiters();
+        });
+    }
 }
