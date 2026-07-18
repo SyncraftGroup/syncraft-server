@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::io::Write;
 use std::process::{Command, ExitStatus};
 
-use git2::{Delta, Oid, Repository};
+use git2::{Delta, Oid, Repository, Sort};
+use syncraft_protocol::UpdateInfo;
 
 use crate::daemon::ipc::{IpcRequest, IpcResponse, is_daemon_alive, send_request};
 use crate::{log_error, log_warn};
@@ -223,6 +224,35 @@ impl GitRepository {
             changes.push(change);
         }
         Ok(changes)
+    }
+
+    pub fn latest_hash(&self) -> Result<Oid, Error> {
+        self.inner.head()?.target().ok_or_else(|| Error::Git(git2::Error::from_str("Failed to get latest hash")))
+    }
+
+    pub fn commits_after(&self, since: &str) -> Result<Vec<UpdateInfo>, git2::Error> {
+        let mut walk = self.inner.revwalk()?;
+        walk.push_head()?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
+
+        let mut messages = Vec::new();
+
+        for oid in walk {
+            let oid = oid?;
+            let oid_str = oid.to_string();
+
+            if oid_str == since {
+                break;
+            }
+
+            let commit = self.inner.find_commit(oid)?;
+            messages.push(UpdateInfo {
+                message: commit.summary()?.unwrap_or("").to_string(),
+                hash: oid_str
+            });
+        }
+
+        Ok(messages)
     }
 }
 

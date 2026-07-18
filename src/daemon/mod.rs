@@ -9,11 +9,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::daemon::sync::{file_mapping, hash_mapping};
+use crate::git::GitRepository;
 use crate::log_info;
 
 use blake3::Hash;
-use syncraft_protocol::SyncFile;
-use tokio::sync::{Mutex, Notify};
+use syncraft_protocol::{Manifest, SyncFile};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::try_join;
 use crate::config::Config;
 use crate::error::Error;
@@ -97,9 +98,11 @@ async fn cmd_run(paths: &SyncraftPaths) -> Result<(), Error> {
 pub struct SyncraftServer {
     paths: SyncraftPaths,
     config: Config,
+    repository: Mutex<GitRepository>,
     shutdown: Arc<Notify>,
     file_mapping: Mutex<HashMap<PathBuf, SyncFile>>,
-    hash_mapping: Mutex<HashMap<Hash, PathBuf>>
+    hash_mapping: Mutex<HashMap<Hash, PathBuf>>,
+    manifest: RwLock<Arc<Manifest>>,
 }
 
 impl SyncraftServer {
@@ -107,12 +110,22 @@ impl SyncraftServer {
     pub(crate) async fn new(paths: &SyncraftPaths, config: Config) -> Result<Self, Error> {
 
         let paths = paths.clone();
+        let repository = Mutex::new(GitRepository::open(&paths.root())?);
         let shutdown = Arc::new(Notify::new());
         let file_mapping = file_mapping(&config).await?;
         let hash_mapping = Mutex::new(hash_mapping(&file_mapping));
-        let file_mapping = Mutex::new(file_mapping);
 
-        Ok(Self { paths, config, shutdown, file_mapping, hash_mapping })
+        let manifest = {
+            let version_hash = repository.lock().await.latest_hash()?.to_string();
+            let version = config.info.clone();
+            let files = file_mapping.clone();
+            Arc::new(Manifest { version_hash, version, files })
+        };
+
+        let file_mapping = Mutex::new(file_mapping);
+        let manifest = RwLock::new(manifest);
+
+        Ok(Self { paths, config, repository, shutdown, file_mapping, hash_mapping, manifest })
     }
 
     pub(crate) async fn run(self: Arc<Self>) -> Result<(), Error> {
@@ -120,7 +133,7 @@ impl SyncraftServer {
         self.shutdown_handlers();
 
         try_join!(
-            self.run_http(),
+            Arc::clone(&self).run_http(),
             Arc::clone(&self).run_ipc()
         )?;
 

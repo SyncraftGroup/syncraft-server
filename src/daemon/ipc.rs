@@ -6,13 +6,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use syncraft_protocol::FileState;
-use syncraft_protocol::SyncFile;
-use syncraft_protocol::SyncMode;
+use syncraft_protocol::{FileState, Manifest, SyncFile, SyncMode};
 use crate::config::Config;
 use crate::daemon::SyncraftServer;
 use crate::git::Change;
-use crate::git::GitRepository;
 use crate::log_debug;
 use crate::log_error;
 use crate::log_info;
@@ -253,8 +250,9 @@ impl SyncraftServer {
     }
 
     async fn update(self: Arc<Self>) -> Result<(), Error> {
-        let repository = GitRepository::open(&self.paths.root())?;
-        let changes = repository.status()?;
+        let changes = {
+            self.repository.lock().await.status()?
+        };
 
         let mut to_update = Vec::new();
 
@@ -291,15 +289,27 @@ impl SyncraftServer {
             }
         }
 
-        let mut file_mapping = self.file_mapping.lock().await;
-        let mut hash_mapping = self.hash_mapping.lock().await;
+        let files = {
+            let mut file_mapping = self.file_mapping.lock().await;
+            let mut hash_mapping = self.hash_mapping.lock().await;
 
-        for (path, file) in to_update {
-            if let Some(state) = &file.state {
-                hash_mapping.insert(state.hash.clone(), path.clone());
+            for (path, file) in to_update {
+                if let Some(state) = &file.state {
+                    hash_mapping.insert(state.hash.clone(), path.clone());
+                }
+                file_mapping.insert(path, file);
             }
-            file_mapping.insert(path, file);
-        }
+            // expensive but isn't frequently called
+            file_mapping.clone()
+        };
+
+        // Rebuild the shared manifest from the updated state.
+        let manifest = {
+            let version_hash = self.repository.lock().await.latest_hash()?.to_string();
+            let version = self.config.info.clone();
+            Arc::new(Manifest { version_hash, version, files })
+        };
+        *self.manifest.write().await = manifest;
 
         Ok(())
     }

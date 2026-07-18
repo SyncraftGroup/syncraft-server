@@ -34,7 +34,7 @@ pub async fn file_mapping(config: &Config) -> Result<HashMap<PathBuf, SyncFile>,
         let path = &object.path;
         if path.is_file() {
             filelist.push(FileMeta { path: path.clone(), mode: object.mode });
-        } else if path.is_file() {
+        } else if path.is_dir() {
             filelist.extend(expand_dir(path, object.mode)?);
         }
     }
