@@ -6,14 +6,14 @@
 //! To add a message: add a variant to [`MessageKey`], then add both `En` and
 //! `Zh` arms in [`translate`].
 
-use std::process::ExitStatus;
+use std::{path::PathBuf, process::ExitStatus};
 
 use console_info::msgs;
 use owo_colors::OwoColorize;
 
 use syncraft_protocol::{Loader, VersionInfo};
 
-use crate::git::Change;
+use crate::{daemon::sync::ModFileType, git::Change};
 
 /// Every user-facing message is identified by a variant of this enum.
 ///
@@ -125,6 +125,13 @@ pub enum MessageKey<'a> {
     AuthlibScriptRestored {
         path: String,
     },
+
+    // Mod Filter
+    ModFilterMayTakeAWhile,
+    GotModType(&'a PathBuf, &'a ModFileType),
+    SelectModType(&'a PathBuf),
+    SelectOptionIgnore,
+    SelectOptionSync,
 
     // Generic
     Done,
@@ -452,7 +459,7 @@ pub fn translate(key: &MessageKey) -> String {
                 Zh: "请确保命令以 'java' 开头。"
             };
             format_reason_hint(&reason, &hint)
-        },
+        }
         MessageKey::AuthlibDone => msgs! {
             En: "Authlib-injector setup complete.",
             Zh: "authlib-injector 配置完成。"
@@ -476,6 +483,38 @@ pub fn translate(key: &MessageKey) -> String {
         MessageKey::AuthlibScriptRestored { path } => msgs! {
             En: format!("Restored startup script '{}'.", path),
             Zh: format!("已还原启动脚本 '{}'。", path)
+        },
+
+        // Mod Filter
+        MessageKey::ModFilterMayTakeAWhile => msgs! {
+            En: "There are some mods to recognize, this may take a while...",
+            Zh: "有一些需要辨别类型的 mod，这可能会花费一些时间..."
+        },
+        MessageKey::GotModType(path, mod_type) => {
+            let type_str = match mod_type {
+                ModFileType::Ignore => msgs! {
+                    En: "Ignored",
+                    Zh: "忽略"
+                },
+                ModFileType::Sync => msgs! {
+                    En: "Sync",
+                    Zh: "同步"
+                },
+                ModFileType::Unknow => "???".to_string(),
+            };
+            format!("{} : {}", path.to_string_lossy(), type_str)
+        }
+        MessageKey::SelectModType(path) => msgs! {
+            En: format!("Please select for the mod below manually: \n{}", path.to_string_lossy().yellow().italic()),
+            Zh: format!("请手动为以下模组选择：\n{}", path.to_string_lossy().yellow().italic())
+        },
+        MessageKey::SelectOptionIgnore => msgs! {
+            En: "Ignore (This mod is server-only)",
+            Zh: "忽略 （该模组仅在服务端运行）"
+        },
+        MessageKey::SelectOptionSync => msgs! {
+            En: "Sync (This mod should be sent to clients)",
+            Zh: "同步 （该模组应该被同步到客户端）"
         },
 
         // Generic

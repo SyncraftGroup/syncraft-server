@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
+    io::Write,
     path::{Path, PathBuf},
 };
 
-use crate::{config::Config, error::Error, log_debug, log_info};
+use crate::{config::Config, error::Error, log_debug, log_info, paths::SyncraftPaths};
 use blake3::Hash;
 use futures::stream::{FuturesUnordered, StreamExt};
+use serde::{Deserialize, Serialize};
 use syncraft_protocol::{FileState, SyncFile, SyncMode};
 
 pub struct FileMeta {
@@ -41,7 +43,10 @@ pub fn expand_dir(source: &Path, target: &Path, mode: SyncMode) -> Result<Vec<Fi
     Ok(files)
 }
 
-pub async fn file_mapping(config: &Config) -> Result<HashMap<PathBuf, SyncFile>, Error> {
+pub async fn file_mapping(
+    config: &Config,
+    paths: &SyncraftPaths,
+) -> Result<HashMap<PathBuf, SyncFile>, Error> {
     let mut filelist = Vec::new();
 
     for object in &config.sync {
@@ -61,7 +66,11 @@ pub async fn file_mapping(config: &Config) -> Result<HashMap<PathBuf, SyncFile>,
                 mode: object.mode,
             });
         } else if source.is_dir() {
-            filelist.extend(expand_dir(source, target, object.mode)?);
+            let mut files = expand_dir(source, target, object.mode)?;
+            if object.is_mod_dir {
+                files = resolve_mods(files, paths)?;
+            }
+            filelist.extend(files);
         }
     }
 
@@ -100,4 +109,36 @@ pub fn hash_mapping(file_mapping: &HashMap<PathBuf, SyncFile>) -> HashMap<Hash, 
         }
     }
     hash_mapping
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ModFileType {
+    Sync,
+    Ignore,
+    Unknow,
+}
+
+pub fn resolve_mods(files: Vec<FileMeta>, paths: &SyncraftPaths) -> Result<Vec<FileMeta>, Error> {
+    let cache_str = std::fs::read_to_string(paths.mod_type_cache()).unwrap_or_default();
+    let mut cache: HashMap<PathBuf, ModFileType> =
+        serde_json::from_str(&cache_str).unwrap_or_default();
+
+    let mut result = Vec::new();
+
+    for file in files {
+        if let Some(mod_type) = cache.get(&file.source)
+            && mod_type != &ModFileType::Ignore
+        {
+            result.push(file);
+        } else {
+            let _ = cache.insert(file.source.clone(), ModFileType::Unknow);
+            result.push(file);
+        }
+    }
+
+    let cache_str = serde_json::to_string_pretty(&cache)?;
+    let mut f = std::fs::File::create(paths.mod_type_cache())?;
+    write!(f, "{}", cache_str)?;
+
+    Ok(result)
 }

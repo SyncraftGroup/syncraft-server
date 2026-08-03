@@ -14,6 +14,9 @@ use crate::{daemon::SyncraftServer, error::Error, log_info, yggdrasil};
 
 impl SyncraftServer {
     pub async fn run_http(self: Arc<Self>) -> Result<(), Error> {
+        let network = self.config.read().await.network.clone();
+        let yggdrasil_config = self.config.read().await.yggdrasil.clone();
+
         let app = Router::new()
             .route("/manifest", get(Self::manifest))
             .route("/download/{hash}", get(Self::download))
@@ -21,14 +24,14 @@ impl SyncraftServer {
             .with_state(self.clone())
             .nest(
                 "/yggdrasil",
-                yggdrasil::init(&self.paths, &self.config.yggdrasil).await?,
+                yggdrasil::init(&self.paths, &yggdrasil_config).await?,
             )
             .layer(middleware::from_fn(crate::log::http_trace));
 
         let address = format!(
             "{}:{}",
-            self.config.network.host.trim(),
-            self.config.network.port
+            network.host.trim(),
+            network.port
         );
         let listener = TcpListener::bind(&address)
             .await

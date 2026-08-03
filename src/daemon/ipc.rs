@@ -251,6 +251,7 @@ impl SyncraftServer {
 
     async fn update(self: Arc<Self>) -> Result<(), Error> {
         let changes = { self.repository.lock().await.status()? };
+        let config = self.config.read().await;
 
         let mut to_update = Vec::new();
 
@@ -258,7 +259,7 @@ impl SyncraftServer {
             match change {
                 Change::Added(path) | Change::Modified(path) => {
                     let state = FileState::from_path(&path).await?;
-                    let mode = infer_sync_mode(&path, &self.config);
+                    let mode = infer_sync_mode(&path, &config);
                     to_update.push((
                         path,
                         SyncFile {
@@ -276,7 +277,7 @@ impl SyncraftServer {
                         },
                     ));
                     let state = FileState::from_path(&to).await?;
-                    let mode = infer_sync_mode(&to, &self.config);
+                    let mode = infer_sync_mode(&to, &config);
                     to_update.push((
                         to,
                         SyncFile {
@@ -315,7 +316,7 @@ impl SyncraftServer {
         // Rebuild the shared manifest from the updated state.
         let manifest = {
             let version_hash = self.repository.lock().await.latest_hash()?.to_string();
-            let version = self.config.info.clone();
+            let version = config.info.clone();
             Arc::new(Manifest {
                 version_hash,
                 version,

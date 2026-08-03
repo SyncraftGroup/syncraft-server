@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -5,9 +6,11 @@ use std::process::{Command, ExitStatus};
 
 use console_info::Ui;
 use git2::{Delta, Oid, Repository, Sort};
+use mod_type::SideStatus;
 use syncraft_protocol::UpdateInfo;
 
 use crate::daemon::ipc::{IpcRequest, IpcResponse, is_daemon_alive, send_request};
+use crate::daemon::sync::ModFileType;
 use crate::{config::Config, error::Error, log_debug, paths::SyncraftPaths};
 use crate::{log_error, log_warn};
 
@@ -101,36 +104,94 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             }
 
             let oid = repository.commit(msg_str)?;
+            publish_request(oid.clone(), &paths)?;
 
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+            // Apply mod filter
+            let cache_str = std::fs::read_to_string(paths.mod_type_cache()).unwrap_or_default();
+            let mut cache: HashMap<PathBuf, ModFileType> =
+                serde_json::from_str(&cache_str).unwrap_or_default();
+            let to_calculate = cache
+                .iter()
+                .filter_map(|(path, mod_type)| match mod_type {
+                    ModFileType::Unknow => Some(path.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<PathBuf>>();
 
-            match rt.block_on(send_request(&paths.socket_path(), &IpcRequest::Update)) {
-                Ok(IpcResponse::Ok) => {
-                    let hash = oid.to_string();
-                    Ui::get().ok(&translate(&MessageKey::Published(hash)));
-                }
-                Ok(IpcResponse::Error { message }) => {
-                    log_error!("Daemon reported error: {}", message);
-                    Ui::get().error(&translate(&MessageKey::Failed { reason: message }));
-                }
-                Err(e) => {
-                    let reason = e.to_string();
-                    log_warn!("Failed to contact daemon: {}", reason);
-                    Ui::get().error(&translate(&MessageKey::DaemonIpcError { reason }));
-                    if let Ok(pid_str) = fs::read_to_string(paths.pid_file()) {
-                        Ui::get().warn(&translate(&MessageKey::DaemonStalePid {
-                            pid: pid_str.trim().to_string(),
-                            pid_file: paths.pid_file().display().to_string(),
-                        }));
+            if to_calculate.is_empty() {
+                return Ok(());
+            }
+            if to_calculate.len() > 2 {
+                ui.step(&translate(&MessageKey::ModFilterMayTakeAWhile));
+            }
+            for path in to_calculate {
+                if let Ok(info) = mod_type::analyze_mod_jar(&path) {
+                    let mod_type = match &info.client {
+                        &SideStatus::Required => ModFileType::Sync,
+                        &SideStatus::Optional => ModFileType::Sync,
+                        &SideStatus::Unsupported => ModFileType::Ignore,
+                    };
+                    ui.ok(&translate(&MessageKey::GotModType(&path, &mod_type)));
+                    let _ = cache.insert(path, mod_type);
+                } else {
+                    let option_ignore = translate(&MessageKey::SelectOptionIgnore);
+                    let option_sync = translate(&MessageKey::SelectOptionSync);
+
+                    let selected = ui.select(
+                        &translate(&MessageKey::SelectModType(&path)),
+                        vec![&option_ignore, &option_sync],
+                    )?;
+
+                    if selected == &option_ignore {
+                        let mod_type = ModFileType::Ignore;
+                        ui.ok(&translate(&MessageKey::GotModType(&path, &mod_type)));
+                        let _ = cache.insert(path, mod_type);
+                    } else if selected == &option_sync {
+                        let mod_type = ModFileType::Sync;
+                        ui.ok(&translate(&MessageKey::GotModType(&path, &mod_type)));
+                        let _ = cache.insert(path, mod_type);
                     }
                 }
-                _ => {
-                    log_warn!("Unexpected IPC response from daemon");
-                }
             }
+
+            let cache_str = serde_json::to_string_pretty(&cache)?;
+            let mut f = std::fs::File::create(paths.mod_type_cache())?;
+            write!(f, "{}", cache_str)?;
+
+            publish_request(oid, &paths)?;
+        }
+    }
+    Ok(())
+}
+
+fn publish_request(oid: Oid, paths: &SyncraftPaths) -> Result<(), Error> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+
+    match rt.block_on(send_request(&paths.socket_path(), &IpcRequest::Update)) {
+        Ok(IpcResponse::Ok) => {
+            let hash = oid.to_string();
+            Ui::get().ok(&translate(&MessageKey::Published(hash)));
+        }
+        Ok(IpcResponse::Error { message }) => {
+            log_error!("Daemon reported error: {}", message);
+            Ui::get().error(&translate(&MessageKey::Failed { reason: message }));
+        }
+        Err(e) => {
+            let reason = e.to_string();
+            log_warn!("Failed to contact daemon: {}", reason);
+            Ui::get().error(&translate(&MessageKey::DaemonIpcError { reason }));
+            if let Ok(pid_str) = fs::read_to_string(paths.pid_file()) {
+                Ui::get().warn(&translate(&MessageKey::DaemonStalePid {
+                    pid: pid_str.trim().to_string(),
+                    pid_file: paths.pid_file().display().to_string(),
+                }));
+            }
+        }
+        _ => {
+            log_warn!("Unexpected IPC response from daemon");
         }
     }
     Ok(())

@@ -69,6 +69,10 @@ impl SyncraftPaths {
             .join("logs")
             .join(format!("{timestamp}.log"))
     }
+
+    pub fn mod_type_cache(&self) -> PathBuf {
+        self.data().join("mod_type_cache.json")
+    }
 }
 
 pub struct YggdrasilPaths<'a> {

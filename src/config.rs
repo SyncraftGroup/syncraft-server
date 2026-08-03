@@ -17,7 +17,7 @@ where
     Ok(path.clean())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SyncObject {
     #[serde(deserialize_with = "deserialize_clean_path")]
     pub source: PathBuf,
@@ -29,13 +29,14 @@ pub struct SyncObject {
     pub is_mod_dir: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NetworkConfig {
     pub host: String,
     pub port: u16,
+    pub modrinth_api: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub info: VersionInfo,
     pub network: NetworkConfig,
@@ -54,6 +55,7 @@ impl Default for Config {
             network: NetworkConfig {
                 host: "127.0.0.1".into(),
                 port: 3000,
+                modrinth_api: None,
             },
             sync: Vec::new(),
             yggdrasil: YggdrasilConfig::default(),
@@ -89,6 +91,10 @@ impl Config {
             config.info.name,
             config.info.vanilla_version
         );
+
+        if let Some(modrinth_api) = &config.network.modrinth_api {
+            mod_type::configure_modrinth_api(modrinth_api.trim_matches('/'));
+        }
         Some(config)
     }
 }
