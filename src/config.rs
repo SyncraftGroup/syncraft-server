@@ -5,12 +5,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use syncraft_protocol::{Loader, SyncMode, VersionInfo};
 
-use crate::{paths::SyncraftPaths, yggdrasil::YggdrasilConfig};
 use crate::log_debug;
 use crate::log_warn;
+use crate::{paths::SyncraftPaths, yggdrasil::YggdrasilConfig};
 
 fn deserialize_clean_path<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
-where D: Deserializer<'de> {
+where
+    D: Deserializer<'de>,
+{
     let path = PathBuf::deserialize(deserializer)?;
     Ok(path.clean())
 }
@@ -18,18 +20,19 @@ where D: Deserializer<'de> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncObject {
     #[serde(deserialize_with = "deserialize_clean_path")]
-    pub path: PathBuf,
-    pub to: PathBuf,
+    pub source: PathBuf,
+    #[serde(deserialize_with = "deserialize_clean_path")]
+    pub target: PathBuf,
     #[serde(default)]
     pub mode: SyncMode,
     #[serde(default)]
-    pub is_mod_dir: bool
+    pub is_mod_dir: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkConfig {
     pub host: String,
-    pub port: u16
+    pub port: u16,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +40,7 @@ pub struct Config {
     pub info: VersionInfo,
     pub network: NetworkConfig,
     pub sync: Vec<SyncObject>,
-    pub yggdrasil: YggdrasilConfig
+    pub yggdrasil: YggdrasilConfig,
 }
 
 impl Default for Config {
@@ -46,20 +49,20 @@ impl Default for Config {
             info: VersionInfo {
                 name: "<name>".into(),
                 vanilla_version: "0.00.0".into(),
-                loader: Loader::Vanilla
+                loader: Loader::Vanilla,
             },
             network: NetworkConfig {
                 host: "127.0.0.1".into(),
                 port: 3000,
             },
             sync: Vec::new(),
-            yggdrasil: YggdrasilConfig::default()
+            yggdrasil: YggdrasilConfig::default(),
         }
     }
 }
 
 impl Config {
-    pub fn load(paths: &SyncraftPaths) -> Option<Self>  {
+    pub fn load(paths: &SyncraftPaths) -> Option<Self> {
         if !paths.workspace().exists() {
             log_debug!("Workspace not found at {}", paths.workspace().display());
             return None;
@@ -93,8 +96,8 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn config_default_values() {
@@ -128,8 +131,8 @@ host = "127.0.0.1"
 port = 3000
 
 [[sync]]
-path = "mods"
-to = "mods"
+source = "mods"
+target = "mods"
 
 [yggdrasil]
 base_url = "http://localhost/yggdrasil"
@@ -164,5 +167,20 @@ identity_falsification = false
         // Cleanup
         let _ = fs::remove_dir_all(tmp.join("syncraft"));
         let _ = fs::remove_file(tmp.join("syncraft.toml"));
+    }
+
+    #[tokio::test]
+    async fn check_ser() {
+        let config = Config {
+            sync: vec![SyncObject {
+                source: "test".into(),
+                target: "test".into(),
+                mode: SyncMode::Default,
+                is_mod_dir: false,
+            }],
+            ..Default::default()
+        };
+        let config_str = toml::to_string_pretty(&config).unwrap();
+        println!("{}", config_str)
     }
 }

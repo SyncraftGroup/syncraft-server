@@ -7,7 +7,7 @@ use crate::error::Error;
 
 #[derive(Debug, Clone)]
 pub struct SyncraftPaths {
-    root: PathBuf
+    root: PathBuf,
 }
 
 impl SyncraftPaths {
@@ -65,16 +65,17 @@ impl SyncraftPaths {
 
     pub fn log_file(&self) -> PathBuf {
         let timestamp = Local::now().format("%Y-%m-%d-%M-%H");
-        self.workspace().join("logs").join(format!("{timestamp}.log"))
+        self.workspace()
+            .join("logs")
+            .join(format!("{timestamp}.log"))
     }
 }
 
 pub struct YggdrasilPaths<'a> {
-    pub paths: &'a SyncraftPaths
+    pub paths: &'a SyncraftPaths,
 }
 
 impl YggdrasilPaths<'_> {
-
     pub fn root(&self) -> PathBuf {
         self.paths.workspace().join("yggdrasil")
     }
@@ -102,7 +103,10 @@ mod tests {
     #[test]
     fn syncraft_paths_workspace() {
         let paths = SyncraftPaths::new(PathBuf::from("/home/user/mcserver"));
-        assert_eq!(paths.workspace(), PathBuf::from("/home/user/mcserver/syncraft"));
+        assert_eq!(
+            paths.workspace(),
+            PathBuf::from("/home/user/mcserver/syncraft")
+        );
     }
 
     #[test]
@@ -134,13 +138,19 @@ mod tests {
     fn yggdrasil_paths_db() {
         let paths = SyncraftPaths::new(PathBuf::from("/mc"));
         let yp = paths.yggdrasil();
-        assert_eq!(yp.db_path(), PathBuf::from("/mc/syncraft/yggdrasil/users.db"));
+        assert_eq!(
+            yp.db_path(),
+            PathBuf::from("/mc/syncraft/yggdrasil/users.db")
+        );
     }
 
     #[test]
     fn yggdrasil_paths_private_key() {
         let paths = SyncraftPaths::new(PathBuf::from("/mc"));
         let yp = paths.yggdrasil();
-        assert_eq!(yp.private_key(), PathBuf::from("/mc/syncraft/yggdrasil/key.pem"));
+        assert_eq!(
+            yp.private_key(),
+            PathBuf::from("/mc/syncraft/yggdrasil/key.pem")
+        );
     }
 }

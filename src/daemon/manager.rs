@@ -101,11 +101,7 @@ pub(crate) fn pid_uptime_secs(pid: u32) -> Option<u64> {
     let starttime = fields.get(19)?.parse::<u64>().ok()?;
 
     let uptime_raw = fs::read_to_string("/proc/uptime").ok()?;
-    let sys_uptime = uptime_raw
-        .split_whitespace()
-        .next()?
-        .parse::<f64>()
-        .ok()?;
+    let sys_uptime = uptime_raw.split_whitespace().next()?.parse::<f64>().ok()?;
 
     let ticks_per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
 

@@ -7,7 +7,7 @@ pub enum Error {
     #[error("{0}")]
     Git(#[from] git2::Error),
     #[error("{0}")]
-    UI(String),
+    UI(#[from] console_info::Error),
     #[error("{0}")]
     TomlSerialize(#[from] toml::ser::Error),
     #[error("{0}")]
@@ -20,8 +20,17 @@ pub enum Error {
     Sign(String),
     #[error("{0}")]
     SkinUpload(String),
-    #[error("Daemon error: {0}")]
-    Daemon(String)
+    #[error("{0}")]
+    Daemon(String),
+    #[error("{0}")]
+    Server(String),
+}
+
+impl From<&str> for Error {
+    fn from(value: &str) -> Self {
+        let content = value.to_string();
+        Self::Server(content)
+    }
 }
 
 impl From<axum_extra::extract::multipart::MultipartError> for Error {

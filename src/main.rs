@@ -1,26 +1,26 @@
+mod account;
+mod authlib;
 mod config;
 mod daemon;
 mod error;
-mod init;
 mod git;
+mod init;
 mod log;
+mod message;
 mod paths;
-mod ui;
 mod yggdrasil;
 
 use clap::{Parser, Subcommand};
 
+use crate::account::AccountAction;
+use crate::authlib::AuthlibAction;
 use crate::daemon::ServeAction;
 use crate::error::Error;
 use crate::git::GitAction;
 use crate::paths::SyncraftPaths;
-use crate::ui::Ui;
 
 #[derive(Parser)]
-#[command(
-    version,
-    about = "Syncraft Minecraft Synchronization Server"
-)]
+#[command(version, about = "Syncraft Minecraft Synchronization Server")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -44,12 +44,22 @@ enum Command {
     /// Git commands
     Git {
         #[command(subcommand)]
-        action: Option<GitCommand>
+        action: Option<GitCommand>,
     },
     /// Publish a new version
     Publish,
     /// Show current status
     Status,
+    /// Manage user accounts
+    Account {
+        #[command(subcommand)]
+        action: AccountCommand,
+    },
+    /// Install authlib-injector and patch startup scripts
+    Authlib {
+        #[command(subcommand)]
+        action: AuthlibCommand,
+    },
 }
 
 #[derive(Subcommand, Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +77,7 @@ enum ServeCommand {
     /// Remove the platform service
     Uninstall,
     /// Tail daemon logs (like `docker logs -f`)
-    Logs
+    Logs,
 }
 
 impl From<ServeCommand> for ServeAction {
@@ -91,7 +101,7 @@ enum GitCommand {
     /// Get current tracking status.
     Status,
     /// Publish a new update.
-    Publish
+    Publish,
 }
 
 impl From<GitCommand> for GitAction {
@@ -99,14 +109,71 @@ impl From<GitCommand> for GitAction {
         match cmd {
             GitCommand::Init => GitAction::Init,
             GitCommand::Status => GitAction::Status,
-            GitCommand::Publish => GitAction::Publish
+            GitCommand::Publish => GitAction::Publish,
+        }
+    }
+}
+
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+enum AccountCommand {
+    /// List all verified accounts
+    List,
+    /// Add a verified account
+    Add {
+        /// Email address
+        email: String,
+        /// Character name
+        character_name: String,
+        /// Password
+        password: String,
+    },
+    /// Remove an account
+    Remove {
+        /// Character name
+        character_name: String,
+    },
+}
+
+impl From<AccountCommand> for AccountAction {
+    fn from(cmd: AccountCommand) -> Self {
+        match cmd {
+            AccountCommand::List => AccountAction::List,
+            AccountCommand::Add {
+                email,
+                character_name,
+                password,
+            } => AccountAction::Add {
+                email,
+                character_name,
+                password,
+            },
+            AccountCommand::Remove { character_name } => AccountAction::Remove {
+                character_name,
+            },
+        }
+    }
+}
+
+#[derive(Subcommand, Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthlibCommand {
+    /// Install authlib-injector and patch startup scripts
+    Inject,
+    /// Remove authlib-injector and restore original scripts
+    Restore,
+}
+
+impl From<AuthlibCommand> for AuthlibAction {
+    fn from(cmd: AuthlibCommand) -> Self {
+        match cmd {
+            AuthlibCommand::Inject => AuthlibAction::Inject,
+            AuthlibCommand::Restore => AuthlibAction::Restore,
         }
     }
 }
 
 fn main() -> Result<(), Error> {
     log::init();
-    ui::configure_inquire();
+    console_info::configure_inquire();
 
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
@@ -128,9 +195,22 @@ fn main() -> Result<(), Error> {
         Command::Publish => {
             git::run(paths, Some(GitAction::Publish))?;
         }
-        Command::Status => {
-            let ui = Ui::get();
-            ui.info(ui::message::MessageKey::Done);
+        Command::Status => {}
+        Command::Account { action } => {
+            let action: AccountAction = action.into();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+            rt.block_on(account::run(paths, action))?;
+        }
+        Command::Authlib { action } => {
+            let action: AuthlibAction = action.into();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+            rt.block_on(authlib::run(paths, action))?;
         }
     }
 

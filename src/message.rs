@@ -8,11 +8,12 @@
 
 use std::process::ExitStatus;
 
+use console_info::msgs;
 use owo_colors::OwoColorize;
 
 use syncraft_protocol::{Loader, VersionInfo};
 
-use crate::{error::Error, git::Change};
+use crate::git::Change;
 
 /// Every user-facing message is identified by a variant of this enum.
 ///
@@ -47,7 +48,9 @@ pub enum MessageKey<'a> {
 
     // Daemon
     DaemonAlreadyRunning,
-    DaemonStarted { pid: u32 },
+    DaemonStarted {
+        pid: u32,
+    },
     DaemonStopped,
     DaemonNotRunning,
     DaemonStatus {
@@ -56,16 +59,79 @@ pub enum MessageKey<'a> {
         address: String,
         manager: &'a str,
     },
-    DaemonIpcError { reason: String },
-    DaemonStalePid { pid: String, pid_file: String },
+    DaemonIpcError {
+        reason: String,
+    },
+    DaemonStalePid {
+        pid: String,
+        pid_file: String,
+    },
     DaemonNotRunningPublish,
     DaemonNotInstalled,
     DaemonInstallUnsupported,
 
+    // Account
+    AccountListEmpty,
+    AccountColName,
+    AccountColEmail,
+    AccountColPassword,
+    AccountColSkin,
+    AccountColCreated,
+    AccountTotal,
+    AccountAdded {
+        character_name: String,
+    },
+    AccountRemoved {
+        character_name: String,
+    },
+    AccountYggdrasilNotConfigured,
+    AccountCharExists {
+        character_name: String,
+    },
+    AccountEmailExists {
+        email: String,
+    },
+    AccountCharNotFound {
+        character_name: String,
+    },
+
+    // Authlib-inject
+    AuthlibDownloading,
+    AuthlibJarExists {
+        path: String,
+    },
+    AuthlibDownloaded {
+        path: String,
+    },
+    AuthlibScriptModified {
+        path: String,
+    },
+    AuthlibScriptAlreadyInjected {
+        path: String,
+    },
+    AuthlibScriptCreated {
+        path: String,
+    },
+    AuthlibNoScriptFound,
+    AuthlibInputCommand,
+    AuthlibCommandParseFailed,
+    AuthlibDone,
+    AuthlibServerPropertiesNotFound,
+    AuthlibOnlineModeSet,
+    AuthlibOnlineModeAlreadyTrue,
+    AuthlibJarRemoved {
+        path: String,
+    },
+    AuthlibScriptRestored {
+        path: String,
+    },
+
     // Generic
     Done,
-    Failed { reason: String },
-    Text(String)
+    Failed {
+        reason: String,
+    },
+    Text(String),
 }
 
 pub fn translate(key: &MessageKey) -> String {
@@ -109,9 +175,7 @@ pub fn translate(key: &MessageKey) -> String {
             En: "Minecraft version (e.g. 1.20.1):",
             Zh: "Minecraft 版本（例如 1.20.1）："
         },
-        MessageKey::VersionInfoDisplay(info) => {
-            format_version_info(info)
-        }
+        MessageKey::VersionInfoDisplay(info) => format_version_info(info),
         MessageKey::VersionInfoConfirm => msgs! {
             En: "Confirm version info (y/n)?",
             Zh: "确认版本信息正确 (y/n)？"
@@ -135,7 +199,6 @@ pub fn translate(key: &MessageKey) -> String {
 
         // Git
         MessageKey::Changes(changes) => {
-
             if changes.is_empty() {
                 return msgs! {
                     En: "No changes.",
@@ -146,13 +209,26 @@ pub fn translate(key: &MessageKey) -> String {
             let mut lines = Vec::<String>::new();
             for change in changes {
                 match change {
-                    Change::Added(path) => lines.push(format!("{}  {}", "+".green().bold(), path.to_string_lossy())),
-                    Change::Deleted(path) => lines.push(format!("{}  {}", "-".red().bold(), path.to_string_lossy())),
-                    Change::Modified(path) => lines.push(format!("{}  {}", "M".yellow().bold(), path.to_string_lossy())),
-                    Change::Renamed { from, to } => lines.push(
-                        format!("{}  {} -> {}", "R".blue().bold(), from.to_string_lossy(), to.to_string_lossy())
-                    ),
-                    Change::Ignored => ()
+                    Change::Added(path) => lines.push(format!(
+                        "{}  {}",
+                        "+".green().bold(),
+                        path.to_string_lossy()
+                    )),
+                    Change::Deleted(path) => {
+                        lines.push(format!("{}  {}", "-".red().bold(), path.to_string_lossy()))
+                    }
+                    Change::Modified(path) => lines.push(format!(
+                        "{}  {}",
+                        "M".yellow().bold(),
+                        path.to_string_lossy()
+                    )),
+                    Change::Renamed { from, to } => lines.push(format!(
+                        "{}  {} -> {}",
+                        "R".blue().bold(),
+                        from.to_string_lossy(),
+                        to.to_string_lossy()
+                    )),
+                    Change::Ignored => (),
                 }
             }
             lines.join("\n")
@@ -219,22 +295,27 @@ pub fn translate(key: &MessageKey) -> String {
             En: "Syncraft daemon is not running.",
             Zh: "Syncraft 守护进程未运行。"
         },
-        MessageKey::DaemonStatus { pid, uptime_secs, address, manager } => {
-            let label_status  = msgs! { En: "Status",  Zh: "状态"  };
-            let label_pid     = msgs! { En: "PID",     Zh: "进程"  };
-            let label_uptime  = msgs! { En: "Uptime",  Zh: "运行"  };
-            let label_addr    = msgs! { En: "Address", Zh: "地址"  };
-            let label_mgr     = msgs! { En: "Manager", Zh: "管理" };
+        MessageKey::DaemonStatus {
+            pid,
+            uptime_secs,
+            address,
+            manager,
+        } => {
+            let label_status = msgs! { En: "Status",  Zh: "状态"  };
+            let label_pid = msgs! { En: "PID",     Zh: "进程"  };
+            let label_uptime = msgs! { En: "Uptime",  Zh: "运行"  };
+            let label_addr = msgs! { En: "Address", Zh: "地址"  };
+            let label_mgr = msgs! { En: "Manager", Zh: "管理" };
 
             let running = msgs! { En: "Running", Zh: "运行中" };
             let uptime = format_uptime(*uptime_secs);
 
             vec![
                 format!("{}: {}", label_status.italic(), running.bold()),
-                format!("{}: {}", label_pid.italic(),    pid.bold()),
+                format!("{}: {}", label_pid.italic(), pid.bold()),
                 format!("{}: {}", label_uptime.italic(), uptime.bold()),
-                format!("{}: {}", label_addr.italic(),   address.bold()),
-                format!("{}: {}", label_mgr.italic(),    manager.bold()),
+                format!("{}: {}", label_addr.italic(), address.bold()),
+                format!("{}: {}", label_mgr.italic(), manager.bold()),
             ]
             .join("\n")
         }
@@ -246,7 +327,7 @@ pub fn translate(key: &MessageKey) -> String {
                 "A stale PID file exists (PID {}).\nRemove with: rm {}",
                 pid, pid_file
             )
-        },
+        }
         MessageKey::DaemonNotRunningPublish => msgs! {
             En: "Syncraft daemon is not running.\nStart it first with 'syncraft serve start', then try again.",
             Zh: "Syncraft 守护进程未运行。\n请先执行 'syncraft serve start' 启动守护进程，然后重试。"
@@ -261,10 +342,140 @@ pub fn translate(key: &MessageKey) -> String {
                 Zh: "请先执行 'syncraft serve install' 将守护进程安装为 systemd 服务。"
             };
             format_reason_hint(&reason, &hint)
-        },
+        }
         MessageKey::DaemonInstallUnsupported => msgs! {
             En: "Service installation requires systemd (Linux).\nUse 'serve start' for fallback daemon mode or 'serve run' for foreground.",
             Zh: "服务安装需要 systemd (Linux)。\n使用 'serve start' 以 fallback 模式运行，或 'serve run' 以前台模式运行。"
+        },
+
+        // Account
+        MessageKey::AccountListEmpty => msgs! {
+            En: "No verified accounts.",
+            Zh: "无已验证的账号。"
+        },
+        MessageKey::AccountColName => msgs! {
+            En: "Name",
+            Zh: "角色"
+        },
+        MessageKey::AccountColEmail => msgs! {
+            En: "Email",
+            Zh: "邮箱"
+        },
+        MessageKey::AccountColPassword => msgs! {
+            En: "Password",
+            Zh: "密码"
+        },
+        MessageKey::AccountColSkin => msgs! {
+            En: "Skin",
+            Zh: "皮肤"
+        },
+        MessageKey::AccountColCreated => msgs! {
+            En: "Created",
+            Zh: "创建时间"
+        },
+        MessageKey::AccountTotal => msgs! {
+            En: "Total",
+            Zh: "总计"
+        },
+        MessageKey::AccountAdded { character_name } => msgs! {
+            En: format!("Account '{}' added.", character_name),
+            Zh: format!("账号 '{}' 已添加。", character_name)
+        },
+        MessageKey::AccountRemoved { character_name } => msgs! {
+            En: format!("Account '{}' removed.", character_name),
+            Zh: format!("账号 '{}' 已删除。", character_name)
+        },
+        MessageKey::AccountYggdrasilNotConfigured => {
+            let reason = msgs! {
+                En: "yggdrasil.base_url is not configured in syncraft.toml.",
+                Zh: "syncraft.toml 中未配置 yggdrasil.base_url。"
+            };
+            let hint = msgs! {
+                En: "Add a [yggdrasil] section with base_url in your config file.",
+                Zh: "请在配置文件中添加 [yggdrasil] 节并设置 base_url。"
+            };
+            format_reason_hint(&reason, &hint)
+        }
+        MessageKey::AccountCharExists { character_name } => msgs! {
+            En: format!("Character '{}' already exists.", character_name),
+            Zh: format!("角色 '{}' 已存在。", character_name)
+        },
+        MessageKey::AccountEmailExists { email } => msgs! {
+            En: format!("Email '{}' is already registered.", email),
+            Zh: format!("邮箱 '{}' 已注册。", email)
+        },
+        MessageKey::AccountCharNotFound { character_name } => msgs! {
+            En: format!("Character '{}' not found.", character_name),
+            Zh: format!("角色 '{}' 未找到。", character_name)
+        },
+
+        // Authlib-inject
+        MessageKey::AuthlibDownloading => msgs! {
+            En: "Downloading authlib-injector...",
+            Zh: "正在下载 authlib-injector..."
+        },
+        MessageKey::AuthlibJarExists { path } => msgs! {
+            En: format!("authlib-injector.jar already exists at '{}'.", path),
+            Zh: format!("authlib-injector.jar 已存在 '{}'。", path)
+        },
+        MessageKey::AuthlibDownloaded { path } => msgs! {
+            En: format!("Downloaded authlib-injector to '{}'.", path),
+            Zh: format!("authlib-injector 已下载到 '{}'。", path)
+        },
+        MessageKey::AuthlibScriptModified { path } => msgs! {
+            En: format!("Modified startup script '{}'. Original backed up.", path),
+            Zh: format!("已修改启动脚本 '{}'。已备份原文件。", path)
+        },
+        MessageKey::AuthlibScriptAlreadyInjected { path } => msgs! {
+            En: format!("Startup script '{}' already contains javaagent. Skipped.", path),
+            Zh: format!("启动脚本 '{}' 已包含 javaagent。已跳过。", path)
+        },
+        MessageKey::AuthlibScriptCreated { path } => msgs! {
+            En: format!("Created startup script '{}'.", path),
+            Zh: format!("已生成启动脚本 '{}'。", path)
+        },
+        MessageKey::AuthlibNoScriptFound => msgs! {
+            En: "No startup script found.",
+            Zh: "未找到启动脚本。"
+        },
+        MessageKey::AuthlibInputCommand => msgs! {
+            En: "Enter the full command you use to start the server (e.g. java -Xmx4G -jar server.jar nogui):",
+            Zh: "请输入启动服务器所用的完整命令（例如 java -Xmx4G -jar server.jar nogui）："
+        },
+        MessageKey::AuthlibCommandParseFailed => {
+            let reason = msgs! {
+                En: "Failed to parse the startup command.",
+                Zh: "无法解析启动命令。"
+            };
+            let hint = msgs! {
+                En: "Make sure the command contains 'java' at the beginning.",
+                Zh: "请确保命令以 'java' 开头。"
+            };
+            format_reason_hint(&reason, &hint)
+        },
+        MessageKey::AuthlibDone => msgs! {
+            En: "Authlib-injector setup complete.",
+            Zh: "authlib-injector 配置完成。"
+        },
+        MessageKey::AuthlibServerPropertiesNotFound => msgs! {
+            En: "server.properties not found. Skipped online-mode check.",
+            Zh: "未找到 server.properties。已跳过 online-mode 检查。"
+        },
+        MessageKey::AuthlibOnlineModeSet => msgs! {
+            En: "Set online-mode=true in server.properties.",
+            Zh: "已在 server.properties 中设置 online-mode=true。"
+        },
+        MessageKey::AuthlibOnlineModeAlreadyTrue => msgs! {
+            En: "online-mode is already true. Skipped.",
+            Zh: "online-mode 已为 true。已跳过。"
+        },
+        MessageKey::AuthlibJarRemoved { path } => msgs! {
+            En: format!("Removed '{}'.", path),
+            Zh: format!("已删除 '{}'。", path)
+        },
+        MessageKey::AuthlibScriptRestored { path } => msgs! {
+            En: format!("Restored startup script '{}'.", path),
+            Zh: format!("已还原启动脚本 '{}'。", path)
         },
 
         // Generic
@@ -275,39 +486,9 @@ pub fn translate(key: &MessageKey) -> String {
         MessageKey::Failed { reason } => {
             format!("Failed: {}", reason)
         }
-        MessageKey::Text(text) => text.to_string()
+        MessageKey::Text(text) => text.to_string(),
     }
 }
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Locale {
-    En,
-    Zh
-}
-
-pub fn get_locale() -> Locale {
-    let locale = sys_locale::get_locale().unwrap_or_else(|| "en".into());
-    if locale.starts_with("zh") {
-        Locale::Zh
-    } else {
-        Locale::En
-    }
-}
-
-/// Shorthand for a two-locale match.
-///
-/// ```ignore
-/// msgs! { En: "Hello" Zh: "你好" },
-/// ```
-macro_rules! msgs {
-    (En: $en:expr, Zh: $zh:expr $(,)?) => {{
-        match $crate::ui::message::get_locale() {
-            $crate::ui::message::Locale::En => ($en).to_string(),
-            $crate::ui::message::Locale::Zh => ($zh).to_string(),
-        }
-    }};
-}
-pub(crate) use msgs;
 
 /// Format a reason+hint pair with a `→` arrow.
 fn format_reason_hint(reason: &str, hint: &str) -> String {
@@ -365,24 +546,14 @@ fn format_version_info(info: &VersionInfo) -> String {
 
     vec![
         format!("  {}: {}", name_label.italic(), info.name.bold()),
-        format!("  {}: {}", version_label.italic(), info.vanilla_version.bold()),
+        format!(
+            "  {}: {}",
+            version_label.italic(),
+            info.vanilla_version.bold()
+        ),
         format!("  {}: {}", loader_label.italic(), loader_str.bold()),
     ]
     .join("\n")
-}
-
-/// Prompt the user for text input.
-pub fn prompt_input(prompt: &str) -> Result<String, Error> {
-    inquire::Text::new(prompt)
-        .prompt()
-        .map_err(|e| Error::UI(e.to_string()))
-}
-
-/// Prompt the user for y/n confirmation.
-pub fn prompt_confirm(prompt: &str) -> Result<bool, Error> {
-    inquire::Confirm::new(prompt)
-        .prompt()
-        .map_err(|e| Error::UI(e.to_string()))
 }
 
 #[cfg(test)]
@@ -391,7 +562,7 @@ mod tests {
 
     #[test]
     fn locale_does_not_panic() {
-        let _ = get_locale();
+        let _ = console_info::get_locale();
     }
 
     #[test]

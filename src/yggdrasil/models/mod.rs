@@ -11,8 +11,11 @@ pub struct User {
     pub id: String,
     pub email: String,
     pub password_hash: String,
+    pub password_raw: Option<String>,
     pub email_verified: bool,
-    pub character_name: String
+    pub character_name: String,
+    pub skin_hash: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -26,15 +29,18 @@ impl ToString for YggdrasilSkinType {
     fn to_string(&self) -> String {
         match self {
             Self::Default => "default".to_string(),
-            Self::Slim => "slim".to_string()
+            Self::Slim => "slim".to_string(),
         }
     }
 }
 
 impl From<String> for YggdrasilSkinType {
     fn from(value: String) -> Self {
-        if value == "slim" { Self::Slim }
-        else { Self::Default }
+        if value == "slim" {
+            Self::Slim
+        } else {
+            Self::Default
+        }
     }
 }
 
@@ -42,7 +48,7 @@ impl From<mc_skin::SkinType> for YggdrasilSkinType {
     fn from(value: mc_skin::SkinType) -> Self {
         match value {
             mc_skin::SkinType::Default => Self::Default,
-            mc_skin::SkinType::Slim => Self::Slim
+            mc_skin::SkinType::Slim => Self::Slim,
         }
     }
 }
@@ -93,11 +99,11 @@ pub struct YggdrasilError {
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct Profile {
     pub id: String,
-    pub name: String
+    pub name: String,
 }
 
 pub struct JoinRequestCache {
     pub user_id: String,
     pub character_name: String,
-    pub timestamp: DateTime<Utc>  
+    pub timestamp: DateTime<Utc>,
 }

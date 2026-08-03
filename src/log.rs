@@ -28,9 +28,9 @@ static FILTER: OnceLock<Level> = OnceLock::new();
 pub fn init() {
     FILTER.get_or_init(|| match std::env::var("SYNCRAFT_LOG").ok().as_deref() {
         Some("error") => Level::Error,
-        Some("warn")  => Level::Warn,
+        Some("warn") => Level::Warn,
         Some("debug") => Level::Debug,
-        _             => Level::Info,
+        _ => Level::Info,
     });
 }
 
@@ -153,7 +153,7 @@ pub async fn http_trace(
         200..=299 => owo_colors::AnsiColors::Green,
         300..=399 => owo_colors::AnsiColors::Blue,
         400..=499 => owo_colors::AnsiColors::Red,
-        _         => owo_colors::AnsiColors::Magenta,
+        _ => owo_colors::AnsiColors::Magenta,
     };
 
     let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();

@@ -1,7 +1,10 @@
 use axum_extra::extract::Multipart;
 use serde::Deserialize;
 
-use crate::{error::Error, yggdrasil::models::{Profile, YggdrasilSkinType}};
+use crate::{
+    error::Error,
+    yggdrasil::models::{Profile, YggdrasilSkinType},
+};
 
 /// `POST /authserver/register` request body.
 #[derive(Debug, Deserialize)]
@@ -11,14 +14,14 @@ pub struct RegisterRequest {
     pub password: String,
     /// The character name shown in-game.
     #[serde(rename = "characterName")]
-    pub character_name: String
+    pub character_name: String,
 }
 
 /// `GET /verify` query parameters.
 #[derive(Debug, Deserialize)]
 pub struct VerifyQuery {
     /// The verification code sent to the user's email.
-    pub code: String
+    pub code: String,
 }
 
 /// Agent metadata sent by the client (always `"Minecraft"` / `1` for Minecraft).
@@ -27,7 +30,7 @@ pub struct Agent {
     #[allow(dead_code)]
     pub name: String,
     #[allow(dead_code)]
-    pub version: i32
+    pub version: i32,
 }
 
 /// `POST /authserver/authenticate` request body.
@@ -37,7 +40,7 @@ pub struct AuthenticateRequest {
     pub agent: Agent,
     /// Email address used as the account identifier (Mojang legacy naming).
     pub username: String,
-    pub password: String
+    pub password: String,
 }
 
 /// `POST /authserver/validate` request body.
@@ -77,7 +80,7 @@ pub struct RefreshRequest {
     #[serde(rename = "clientToken")]
     pub client_token: String,
     #[serde(rename = "selectedProfile")]
-    pub selected_profile: Option<Profile>
+    pub selected_profile: Option<Profile>,
 }
 
 /// `POST /sessionserver/session/minecraft/join` request body.
@@ -88,7 +91,7 @@ pub struct JoinRequest {
     #[serde(rename = "selectedProfile")]
     pub selected_profile: Option<Profile>,
     #[serde(rename = "serverId")]
-    pub server_id: String
+    pub server_id: String,
 }
 
 /// `GET /sessionserver/session/minecraft/hasJoined` query parameters.
@@ -96,7 +99,7 @@ pub struct JoinRequest {
 pub struct HasJoinedQuery {
     pub username: String,
     #[serde(rename = "serverId")]
-    pub server_id: String
+    pub server_id: String,
 }
 
 /// `GET /sessionserver/session/minecraft/profile/{uuid}` query parameters.
@@ -116,22 +119,18 @@ pub struct TextureUpload {
 impl TryFrom<TextureUploadBuilder> for TextureUpload {
     type Error = Error;
 
-    fn try_from(
-        builder: TextureUploadBuilder,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(builder: TextureUploadBuilder) -> Result<Self, Self::Error> {
         Ok(Self {
             skin_type: match builder.model.as_deref() {
                 None | Some("") => YggdrasilSkinType::Default,
                 Some("slim") => YggdrasilSkinType::Slim,
                 Some(_) => {
-                    return Err(Error::SkinUpload(
-                        "invalid model".into(),
-                    ));
+                    return Err(Error::SkinUpload("invalid model".into()));
                 }
             },
-            data: builder.image.ok_or_else(|| {
-                Error::SkinUpload("missing file".into())
-            })?,
+            data: builder
+                .image
+                .ok_or_else(|| Error::SkinUpload("missing file".into()))?,
         })
     }
 }
@@ -166,7 +165,7 @@ impl TextureUploadBuilder {
                     builder.filename = field.file_name().map(str::to_owned);
                     builder.image = Some(field.bytes().await?.to_vec());
                 }
-                _ => ()
+                _ => (),
             }
         }
 

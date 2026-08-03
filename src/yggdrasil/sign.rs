@@ -1,6 +1,11 @@
 use base64::Engine;
 use rand_core::OsRng;
-use rsa::{RsaPrivateKey, pkcs1v15::SigningKey, pkcs8::{DecodePrivateKey, EncodePrivateKey}, signature::{SignatureEncoding, Signer}};
+use rsa::{
+    RsaPrivateKey,
+    pkcs1v15::SigningKey,
+    pkcs8::{DecodePrivateKey, EncodePrivateKey},
+    signature::{SignatureEncoding, Signer},
+};
 use sha1::Sha1;
 use tokio::fs;
 
@@ -10,8 +15,9 @@ use crate::{error::Error, log_info, paths::SyncraftPaths};
 pub async fn private_key(paths: &SyncraftPaths) -> Result<RsaPrivateKey, Error> {
     let key_file = paths.yggdrasil().private_key();
     if key_file.exists()
-    && let Ok(pem) = fs::read_to_string(&key_file).await
-    && let Ok(key) = RsaPrivateKey::from_pkcs8_pem(&pem) {
+        && let Ok(pem) = fs::read_to_string(&key_file).await
+        && let Ok(key) = RsaPrivateKey::from_pkcs8_pem(&pem)
+    {
         return Ok(key);
     }
 

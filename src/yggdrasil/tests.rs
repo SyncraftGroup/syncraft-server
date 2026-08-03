@@ -7,10 +7,10 @@
 // ============================================================================
 #[cfg(test)]
 mod unit {
-    use chrono::{Duration, Utc};
     use crate::yggdrasil::db::unsigned_uuid;
     use crate::yggdrasil::email::verify_email_string;
     use crate::yggdrasil::models::{TokenStatus, YggdrasilSkinType};
+    use chrono::{Duration, Utc};
 
     // -- TokenStatus ---------------------------------------------------------
 
@@ -42,8 +42,7 @@ mod unit {
     #[test]
     fn token_status_boundary_7d() {
         // Just inside the Inactive window (6d 23h 59min)
-        let created =
-            Utc::now() - Duration::days(6) - Duration::hours(23) - Duration::minutes(59);
+        let created = Utc::now() - Duration::days(6) - Duration::hours(23) - Duration::minutes(59);
         assert_eq!(TokenStatus::from_created_at(created), TokenStatus::Inactive);
     }
 
@@ -109,9 +108,9 @@ mod unit {
 
     #[test]
     fn sign_produces_base64_signature() {
+        use crate::yggdrasil::sign::sign;
         use rsa::{RsaPrivateKey, pkcs1v15::SigningKey};
         use sha1::Sha1;
-        use crate::yggdrasil::sign::sign;
 
         let key = RsaPrivateKey::new(&mut rand_core::OsRng, 2048).unwrap();
         let signing_key = SigningKey::<Sha1>::new(key);
@@ -120,7 +119,11 @@ mod unit {
         assert!(!sig.is_empty());
         // Should be valid Base64
         use base64::Engine;
-        assert!(base64::engine::general_purpose::STANDARD.decode(&sig).is_ok());
+        assert!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&sig)
+                .is_ok()
+        );
     }
 }
 
@@ -129,14 +132,12 @@ mod unit {
 // ============================================================================
 #[cfg(test)]
 mod db_tests {
-    use sqlx::SqlitePool;
     use crate::yggdrasil::db::DBManager;
     use crate::yggdrasil::models::YggdrasilSkinType;
+    use sqlx::SqlitePool;
 
     async fn test_db() -> DBManager {
-        let pool = SqlitePool::connect("sqlite::memory:")
-            .await
-            .unwrap();
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         DBManager::init_db(&pool).await.unwrap();
         DBManager { pool }
     }
@@ -171,10 +172,7 @@ mod db_tests {
     #[tokio::test]
     async fn verify_email_works() {
         let db = test_db().await;
-        let (_user, code) = db
-            .create_user("v@b.com", "pass", "V")
-            .await
-            .unwrap();
+        let (_user, code) = db.create_user("v@b.com", "pass", "V").await.unwrap();
         let verified_id = db.verify_email(&code).await.unwrap().unwrap();
         assert_eq!(verified_id, _user.id);
 
@@ -195,10 +193,7 @@ mod db_tests {
     #[tokio::test]
     async fn create_and_get_token() {
         let db = test_db().await;
-        let (user, _) = db
-            .create_user("tok@b.com", "pass", "Tok")
-            .await
-            .unwrap();
+        let (user, _) = db.create_user("tok@b.com", "pass", "Tok").await.unwrap();
         let (access, client) = db.create_tokens(&user.id).await.unwrap();
         assert!(!access.is_empty());
         assert!(!client.is_empty());
@@ -218,10 +213,7 @@ mod db_tests {
     #[tokio::test]
     async fn refresh_token_creates_new_access() {
         let db = test_db().await;
-        let (user, _) = db
-            .create_user("ref@b.com", "pass", "Ref")
-            .await
-            .unwrap();
+        let (user, _) = db.create_user("ref@b.com", "pass", "Ref").await.unwrap();
         let (access1, client) = db.create_tokens(&user.id).await.unwrap();
         let access2 = db.refresh_token(&client, &user.id).await.unwrap();
         assert_ne!(access1, access2);
@@ -236,10 +228,7 @@ mod db_tests {
     #[tokio::test]
     async fn delete_token() {
         let db = test_db().await;
-        let (user, _) = db
-            .create_user("del@b.com", "pass", "Del")
-            .await
-            .unwrap();
+        let (user, _) = db.create_user("del@b.com", "pass", "Del").await.unwrap();
         let (access, _) = db.create_tokens(&user.id).await.unwrap();
         db.delete_token(&access).await.unwrap();
         assert!(db.get_token(&access).await.unwrap().is_none());
@@ -347,15 +336,9 @@ mod db_tests {
     #[tokio::test]
     async fn create_user_overwrites_unverified_duplicate() {
         let db = test_db().await;
-        let (user1, code1) = db
-            .create_user("dup@b.com", "pass1", "Char1")
-            .await
-            .unwrap();
+        let (user1, code1) = db.create_user("dup@b.com", "pass1", "Char1").await.unwrap();
         // Re-registering the same unverified email removes the first and creates a new one
-        let (user2, code2) = db
-            .create_user("dup@b.com", "pass2", "Char2")
-            .await
-            .unwrap();
+        let (user2, code2) = db.create_user("dup@b.com", "pass2", "Char2").await.unwrap();
         assert_ne!(user1.id, user2.id);
         assert_ne!(code1, code2);
         assert_eq!(user2.character_name, "Char2");
@@ -366,18 +349,13 @@ mod db_tests {
         assert!(db.get_profile_for_user(&user1.id).await.unwrap().is_none());
     }
 
-
     #[tokio::test]
     async fn character_name_unique_ignore_case() {
         let db = test_db().await;
-        let (_user, code) = db
-            .create_user("a@b.com", "pass", "CharName")
-            .await
-            .unwrap();
+        let (_user, code) = db.create_user("a@b.com", "pass", "CharName").await.unwrap();
         db.verify_email(&code).await.unwrap();
 
-        let lower_case_create = db
-            .create_user("a@b.com", "pass", "charname").await;
+        let lower_case_create = db.create_user("a@b.com", "pass", "charname").await;
         assert!(lower_case_create.is_err());
     }
 }
@@ -389,7 +367,7 @@ mod db_tests {
 mod integration {
     use axum::Router;
     use axum::body::Body;
-    use axum::http::{header, Request, StatusCode};
+    use axum::http::{Request, StatusCode, header};
     use rsa::{RsaPrivateKey, pkcs1v15::SigningKey, pkcs8::EncodePublicKey};
     use sha1::Sha1;
     use sqlx::SqlitePool;
@@ -450,7 +428,13 @@ mod integration {
 
     async fn get(app: &mut Router, uri: &str) -> axum::response::Response {
         app.as_service()
-            .oneshot(Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap()
     }
@@ -479,11 +463,7 @@ mod integration {
             .unwrap()
     }
 
-    async fn delete(
-        app: &mut Router,
-        uri: &str,
-        bearer_token: &str,
-    ) -> axum::response::Response {
+    async fn delete(app: &mut Router, uri: &str, bearer_token: &str) -> axum::response::Response {
         app.as_service()
             .oneshot(
                 Request::builder()
@@ -509,7 +489,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         serde_json::from_slice(&body).unwrap()
     }
 
@@ -528,7 +510,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         (
             json["accessToken"].as_str().unwrap().to_owned(),
@@ -559,13 +543,17 @@ mod integration {
         let mut app = test_app().await;
         let resp = get(&mut app, "/").await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["meta"]["serverName"], "syncraft-yggdrasil");
-        assert!(json["signaturePublickey"]
-            .as_str()
-            .unwrap()
-            .contains("BEGIN PUBLIC KEY"));
+        assert!(
+            json["signaturePublickey"]
+                .as_str()
+                .unwrap()
+                .contains("BEGIN PUBLIC KEY")
+        );
     }
 
     // -- Register ------------------------------------------------------------
@@ -621,7 +609,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(!json["accessToken"].as_str().unwrap().is_empty());
         assert!(!json["clientToken"].as_str().unwrap().is_empty());
@@ -737,7 +727,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_ne!(json["accessToken"].as_str().unwrap(), access_token);
         assert_eq!(json["clientToken"].as_str().unwrap(), client_token);
@@ -909,7 +901,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "IllegalArgumentException");
     }
@@ -936,7 +930,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["name"], "TestChar");
     }
@@ -990,8 +986,7 @@ mod integration {
         let mut app = test_app().await;
         let (access_token, _, user_id) = register_and_auth(&mut app).await;
 
-        let skin_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test/skin.png");
+        let skin_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test/skin.png");
         let skin_data = std::fs::read(&skin_path).unwrap();
 
         let boundary = "testboundary";
@@ -1033,7 +1028,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["name"], "TestChar");
     }
@@ -1059,7 +1056,9 @@ mod integration {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["properties"].is_array());
     }

@@ -1,7 +1,12 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router, extract::{Path, State}, http::{HeaderMap, HeaderValue, StatusCode, header}, middleware, response::IntoResponse, routing::get,
+    Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware,
+    response::IntoResponse,
+    routing::get,
 };
 use tokio::net::TcpListener;
 
@@ -9,19 +14,25 @@ use crate::{daemon::SyncraftServer, error::Error, log_info, yggdrasil};
 
 impl SyncraftServer {
     pub async fn run_http(self: Arc<Self>) -> Result<(), Error> {
-
         let app = Router::new()
             .route("/manifest", get(Self::manifest))
             .route("/download/{hash}", get(Self::download))
             .route("/updateInfo/{hash}", get(Self::update_info))
             .with_state(self.clone())
-            .nest("/yggdrasil", yggdrasil::init(&self.paths, &self.config.yggdrasil).await?)
+            .nest(
+                "/yggdrasil",
+                yggdrasil::init(&self.paths, &self.config.yggdrasil).await?,
+            )
             .layer(middleware::from_fn(crate::log::http_trace));
 
-        let address = format!("{}:{}", self.config.network.host.trim(), self.config.network.port);
-        let listener = TcpListener::bind(&address).await.map_err(|e| {
-            Error::Daemon(format!("Failed to bind HTTP listener: {}", e))
-        })?;
+        let address = format!(
+            "{}:{}",
+            self.config.network.host.trim(),
+            self.config.network.port
+        );
+        let listener = TcpListener::bind(&address)
+            .await
+            .map_err(|e| Error::Daemon(format!("Failed to bind HTTP listener: {}", e)))?;
         log_info!("HTTP server listening on {address}");
 
         let http_shutdown = self.shutdown.clone();
@@ -35,9 +46,7 @@ impl SyncraftServer {
         Ok(())
     }
 
-    async fn manifest(
-        State(state): State<Arc<Self>>
-    ) -> impl IntoResponse {
+    async fn manifest(State(state): State<Arc<Self>>) -> impl IntoResponse {
         let manifest = Arc::clone(&*state.manifest.read().await);
         Json(manifest).into_response()
     }
@@ -93,24 +102,29 @@ impl SyncraftServer {
 
         let code = {
             if let Ok(status) = state.repository.lock().await.status()
-            && !status.is_empty() { StatusCode::CONFLICT }
-            else { StatusCode::OK }
+                && !status.is_empty()
+            {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::OK
+            }
         };
         (code, headers, data).into_response()
     }
 
     async fn update_info(
         State(state): State<Arc<Self>>,
-        Path(hash): Path<String>
+        Path(hash): Path<String>,
     ) -> impl IntoResponse {
         let updates = {
-            if let Ok(updates) = state.repository
-            .lock().await.commits_after(&hash) { updates }
-            else {
+            if let Ok(updates) = state.repository.lock().await.commits_after(&hash) {
+                updates
+            } else {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed to get commit info"
-                ).into_response();
+                    "Failed to get commit info",
+                )
+                    .into_response();
             }
         };
         Json(updates).into_response()

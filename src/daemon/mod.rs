@@ -1,7 +1,7 @@
+pub(crate) mod http;
+pub(crate) mod ipc;
 mod manager;
 mod sync;
-pub(crate) mod ipc;
-pub(crate) mod http;
 
 use std::collections::HashMap;
 use std::fs;
@@ -12,15 +12,15 @@ use crate::daemon::sync::{file_mapping, hash_mapping};
 use crate::git::GitRepository;
 use crate::log_info;
 
+use crate::config::Config;
+use crate::error::Error;
+use crate::message::{MessageKey, translate};
+use crate::paths::SyncraftPaths;
 use blake3::Hash;
+use console_info::Ui;
 use syncraft_protocol::{Manifest, SyncFile};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::try_join;
-use crate::config::Config;
-use crate::error::Error;
-use crate::paths::SyncraftPaths;
-use crate::ui::message::MessageKey;
-use crate::ui::Ui;
 
 /// Actions that the `serve` command can take.
 pub enum ServeAction {
@@ -38,10 +38,7 @@ pub enum ServeAction {
 /// Route to the appropriate handler using the best available service manager.
 ///
 /// `action` is `None` when no subcommand is given; defaults to `Start`.
-pub fn handle_command(
-    paths: &SyncraftPaths,
-    action: Option<&ServeAction>,
-) -> Result<(), Error> {
+pub fn handle_command(paths: &SyncraftPaths, action: Option<&ServeAction>) -> Result<(), Error> {
     let action = action.unwrap_or(&ServeAction::Start);
 
     match action {
@@ -72,10 +69,10 @@ pub fn handle_command(
 ///
 /// Used by `syncraft serve run` and systemd `ExecStart=`.
 async fn cmd_run(paths: &SyncraftPaths) -> Result<(), Error> {
-    let config =
-    if let Some(config) = Config::load(paths) { config }
-    else {
-        Ui::get().error(MessageKey::Uninitialized);
+    let config = if let Some(config) = Config::load(paths) {
+        config
+    } else {
+        Ui::get().error(&translate(&MessageKey::Uninitialized));
         return Ok(());
     };
 
@@ -106,9 +103,7 @@ pub struct SyncraftServer {
 }
 
 impl SyncraftServer {
-
     pub(crate) async fn new(paths: &SyncraftPaths, config: Config) -> Result<Self, Error> {
-
         let paths = paths.clone();
         let repository = Mutex::new(GitRepository::open(&paths.root())?);
         let shutdown = Arc::new(Notify::new());
@@ -119,23 +114,31 @@ impl SyncraftServer {
             let version_hash = repository.lock().await.latest_hash()?.to_string();
             let version = config.info.clone();
             let files = file_mapping.clone();
-            Arc::new(Manifest { version_hash, version, files })
+            Arc::new(Manifest {
+                version_hash,
+                version,
+                files,
+            })
         };
 
         let file_mapping = Mutex::new(file_mapping);
         let manifest = RwLock::new(manifest);
 
-        Ok(Self { paths, config, repository, shutdown, file_mapping, hash_mapping, manifest })
+        Ok(Self {
+            paths,
+            config,
+            repository,
+            shutdown,
+            file_mapping,
+            hash_mapping,
+            manifest,
+        })
     }
 
     pub(crate) async fn run(self: Arc<Self>) -> Result<(), Error> {
-
         self.shutdown_handlers();
 
-        try_join!(
-            Arc::clone(&self).run_http(),
-            Arc::clone(&self).run_ipc()
-        )?;
+        try_join!(Arc::clone(&self).run_http(), Arc::clone(&self).run_ipc())?;
 
         log_info!("Server shutdown complete");
 
@@ -146,7 +149,6 @@ impl SyncraftServer {
     }
 
     fn shutdown_handlers(&self) {
-
         let signal_shutdown = self.shutdown.clone();
         tokio::spawn(async move {
             tokio::signal::ctrl_c().await.ok();
@@ -156,12 +158,11 @@ impl SyncraftServer {
 
         let term_shutdown = self.shutdown.clone();
         tokio::spawn(async move {
-            let mut stream = match tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::terminate(),
-            ) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
+            let mut stream =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
             stream.recv().await;
             log_info!("SIGTERM received, shutting down");
             term_shutdown.notify_waiters();

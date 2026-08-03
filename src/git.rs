@@ -1,30 +1,31 @@
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
+use console_info::Ui;
 use git2::{Delta, Oid, Repository, Sort};
 use syncraft_protocol::UpdateInfo;
 
 use crate::daemon::ipc::{IpcRequest, IpcResponse, is_daemon_alive, send_request};
+use crate::{config::Config, error::Error, log_debug, paths::SyncraftPaths};
 use crate::{log_error, log_warn};
-use crate::{config::Config, error::Error, log_debug, paths::SyncraftPaths, ui::{Ui, message::{MessageKey, translate}}};
 
+use crate::message::{MessageKey, translate};
 
 pub enum GitAction {
     Init,
     Status,
-    Publish
+    Publish,
 }
 
 pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error> {
-
     let action = action.unwrap_or(GitAction::Status);
 
-    let config =
-    if let Some(config) = Config::load(&paths) { config }
-    else {
-        Ui::get().error(MessageKey::Uninitialized);
+    let config = if let Some(config) = Config::load(&paths) {
+        config
+    } else {
+        Ui::get().error(&translate(&MessageKey::Uninitialized));
         return Ok(());
     };
     match action {
@@ -32,10 +33,10 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             init_repo(&paths, &config)?;
         }
         GitAction::Status => {
-            let repository =
-            if let Ok(repo) = GitRepository::open(&paths.root()) { repo }
-            else {
-                Ui::get().error(MessageKey::Uninitialized);
+            let repository = if let Ok(repo) = GitRepository::open(&paths.root()) {
+                repo
+            } else {
+                Ui::get().error(&translate(&MessageKey::Uninitialized));
                 return Ok(());
             };
             generate_gitignore(&paths, &config)?;
@@ -46,20 +47,20 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             // Pre-check: daemon must be alive before going through the
             // editor / confirm / commit flow.
             if !is_daemon_alive(&paths.socket_path(), &paths.pid_file()) {
-                Ui::get().error(MessageKey::DaemonNotRunningPublish);
+                Ui::get().error(&translate(&MessageKey::DaemonNotRunningPublish));
                 return Ok(());
             }
 
-            let repository =
-            if let Ok(repo) = GitRepository::open(&paths.root()) { repo }
-            else {
-                Ui::get().error(MessageKey::Uninitialized);
+            let repository = if let Ok(repo) = GitRepository::open(&paths.root()) {
+                repo
+            } else {
+                Ui::get().error(&translate(&MessageKey::Uninitialized));
                 return Ok(());
             };
             generate_gitignore(&paths, &config)?;
             let changes = repository.status()?;
             if changes.is_empty() {
-                Ui::get().warn(MessageKey::PublishAbortedEmptyUpdate);
+                Ui::get().warn(&translate(&MessageKey::PublishAbortedEmptyUpdate));
                 return Ok(());
             }
 
@@ -67,32 +68,35 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             msg.create_default(&changes)?;
 
             let editor = get_editor();
-            let edit_status =
-            if let Ok(status) = msg.edit(&editor) { status }
-            else {
-                Ui::get().error(MessageKey::FailedToLaunchEditor(editor));
+            let edit_status = if let Ok(status) = msg.edit(&editor) {
+                status
+            } else {
+                Ui::get().error(&translate(&MessageKey::FailedToLaunchEditor(editor)));
                 return Ok(());
             };
 
             if !edit_status.success() {
-                Ui::get().error(MessageKey::EditorExitedUnexpectedly(editor, edit_status));
+                Ui::get().error(&translate(&MessageKey::EditorExitedUnexpectedly(
+                    editor,
+                    edit_status,
+                )));
                 return Ok(());
             }
 
-            let msg_str =
-            if let Some(msg_str) = msg.read()? { msg_str }
-            else {
+            let msg_str = if let Some(msg_str) = msg.read()? {
+                msg_str
+            } else {
                 // An empty message aborts the publish.
-                Ui::get().warn(MessageKey::PublishAbortedEmptyMessage);
+                Ui::get().warn(&translate(&MessageKey::PublishAbortedEmptyMessage));
                 return Ok(());
             };
 
             let ui = Ui::get();
-            ui.info(MessageKey::Text(msg_str.clone()));
+            ui.info(&translate(&MessageKey::Text(msg_str.clone())));
             ui.echo(&translate(&MessageKey::Changes(changes)));
 
-            if !ui.confirm(MessageKey::PublishConfirm)? {
-                ui.warn(MessageKey::PublishCancelled);
+            if !ui.confirm(&translate(&MessageKey::PublishConfirm))? {
+                ui.warn(&translate(&MessageKey::PublishCancelled));
                 return Ok(());
             }
 
@@ -106,21 +110,21 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             match rt.block_on(send_request(&paths.socket_path(), &IpcRequest::Update)) {
                 Ok(IpcResponse::Ok) => {
                     let hash = oid.to_string();
-                    Ui::get().ok(MessageKey::Published(hash));
+                    Ui::get().ok(&translate(&MessageKey::Published(hash)));
                 }
                 Ok(IpcResponse::Error { message }) => {
                     log_error!("Daemon reported error: {}", message);
-                    Ui::get().error(MessageKey::Failed { reason: message });
+                    Ui::get().error(&translate(&MessageKey::Failed { reason: message }));
                 }
                 Err(e) => {
                     let reason = e.to_string();
                     log_warn!("Failed to contact daemon: {}", reason);
-                    Ui::get().error(MessageKey::DaemonIpcError { reason });
+                    Ui::get().error(&translate(&MessageKey::DaemonIpcError { reason }));
                     if let Ok(pid_str) = fs::read_to_string(paths.pid_file()) {
-                        Ui::get().warn(MessageKey::DaemonStalePid {
+                        Ui::get().warn(&translate(&MessageKey::DaemonStalePid {
                             pid: pid_str.trim().to_string(),
                             pid_file: paths.pid_file().display().to_string(),
-                        });
+                        }));
                     }
                 }
                 _ => {
@@ -137,25 +141,25 @@ pub enum Change {
     Added(PathBuf),
     Modified(PathBuf),
     Deleted(PathBuf),
-    Renamed {
-        from: PathBuf,
-        to: PathBuf
-    },
-    Ignored
+    Renamed { from: PathBuf, to: PathBuf },
+    Ignored,
 }
 
 pub struct GitRepository {
-    inner: Repository
+    inner: Repository,
 }
 
 impl GitRepository {
-
     fn init(path: &Path) -> Result<Self, Error> {
-        Ok(Self { inner: Repository::init(path)? })
+        Ok(Self {
+            inner: Repository::init(path)?,
+        })
     }
 
     pub fn open(path: &Path) -> Result<Self, Error> {
-        Ok(Self { inner: Repository::open(path)? })
+        Ok(Self {
+            inner: Repository::open(path)?,
+        })
     }
 
     fn commit(&self, msg: String) -> Result<Oid, Error> {
@@ -168,32 +172,20 @@ impl GitRepository {
 
         let sig = git2::Signature::now("syncraft", "syncraft@local")?;
 
-        let parent = self.inner.head()
+        let parent = self
+            .inner
+            .head()
             .ok()
             .and_then(|h| h.target())
             .and_then(|id| self.inner.find_commit(id).ok());
 
         let oid = match parent {
-            Some(parent) => {
-                self.inner.commit(
-                    Some("HEAD"),
-                    &sig,
-                    &sig,
-                    &msg,
-                    &tree,
-                    &[&parent],
-                )?
-            }
-            None => {
-                self.inner.commit(
-                    Some("HEAD"),
-                    &sig,
-                    &sig,
-                    &msg,
-                    &tree,
-                    &[],
-                )?
-            }
+            Some(parent) => self
+                .inner
+                .commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[&parent])?,
+            None => self
+                .inner
+                .commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[])?,
         };
         Ok(oid)
     }
@@ -211,15 +203,21 @@ impl GitRepository {
         for delta in diff.deltas() {
             let status = delta.status();
             let change = match &status {
-                Delta::Added | Delta::Untracked => Ok(Change::Added(PathBuf::from(delta.new_file().path().ok_or_else(err)?))),
-                Delta::Modified => Ok(Change::Modified(PathBuf::from(delta.new_file().path().ok_or_else(err)?))),
-                Delta::Deleted => Ok(Change::Deleted(PathBuf::from(delta.old_file().path().ok_or_else(err)?))),
+                Delta::Added | Delta::Untracked => Ok(Change::Added(PathBuf::from(
+                    delta.new_file().path().ok_or_else(err)?,
+                ))),
+                Delta::Modified => Ok(Change::Modified(PathBuf::from(
+                    delta.new_file().path().ok_or_else(err)?,
+                ))),
+                Delta::Deleted => Ok(Change::Deleted(PathBuf::from(
+                    delta.old_file().path().ok_or_else(err)?,
+                ))),
                 Delta::Renamed => Ok(Change::Renamed {
                     from: PathBuf::from(delta.old_file().path().ok_or_else(err)?),
-                    to: PathBuf::from(delta.new_file().path().ok_or_else(err)?)
+                    to: PathBuf::from(delta.new_file().path().ok_or_else(err)?),
                 }),
                 Delta::Ignored | Delta::Unmodified => Ok(Change::Ignored),
-                _ => Err(Error::Git(git2::Error::from_str("Unexpected delta type")))
+                _ => Err(Error::Git(git2::Error::from_str("Unexpected delta type"))),
             }?;
             changes.push(change);
         }
@@ -227,7 +225,10 @@ impl GitRepository {
     }
 
     pub fn latest_hash(&self) -> Result<Oid, Error> {
-        self.inner.head()?.target().ok_or_else(|| Error::Git(git2::Error::from_str("Failed to get latest hash")))
+        self.inner
+            .head()?
+            .target()
+            .ok_or_else(|| Error::Git(git2::Error::from_str("Failed to get latest hash")))
     }
 
     pub fn commits_after(&self, since: &str) -> Result<Vec<UpdateInfo>, git2::Error> {
@@ -248,7 +249,7 @@ impl GitRepository {
             let commit = self.inner.find_commit(oid)?;
             messages.push(UpdateInfo {
                 message: commit.summary()?.unwrap_or("").to_string(),
-                hash: oid_str
+                hash: oid_str,
             });
         }
 
@@ -268,9 +269,9 @@ fn init_repo(paths: &SyncraftPaths, config: &Config) -> Result<(), Error> {
 fn generate_gitignore(paths: &SyncraftPaths, config: &Config) -> Result<(), Error> {
     let mut gitignore = default_gitignore();
     for object in &config.sync {
-        mark_in_gitignore(&mut gitignore, &object.path);
-        if object.path.is_dir() {
-            gitignore.push(format!("!{}/**", object.path.to_string_lossy()));
+        mark_in_gitignore(&mut gitignore, &object.source);
+        if object.source.is_dir() {
+            gitignore.push(format!("!{}/**", object.source.to_string_lossy()));
         }
     }
     std::fs::write(paths.gitignore(), gitignore.join("\n"))?;
@@ -281,15 +282,16 @@ fn default_gitignore() -> Vec<String> {
     vec![
         "*".to_string(),
         "!.gitignore".to_string(),
-        "!syncraft.toml".to_string()
+        "!syncraft.toml".to_string(),
     ]
 }
 
 /// Recursively add `!path` entries so git tracks the given path.
 fn mark_in_gitignore(gitignore: &mut Vec<String>, path: &Path) {
     if let Some(parent) = path.parent()
-    && parent != Path::new("")
-    && !gitignore.contains(&format!("!{}", parent.to_string_lossy())) {
+        && parent != Path::new("")
+        && !gitignore.contains(&format!("!{}", parent.to_string_lossy()))
+    {
         mark_in_gitignore(gitignore, parent);
     }
     if path.is_dir() {
@@ -300,36 +302,45 @@ fn mark_in_gitignore(gitignore: &mut Vec<String>, path: &Path) {
 }
 
 pub struct CommitMsg {
-    file_path: PathBuf
+    file_path: PathBuf,
 }
 
 const DEFAULT_EDITOR: &str = "vi";
 fn get_editor() -> String {
-    std::env::var("SYNCRAFT_EDITOR")
-        .unwrap_or_else(|_| DEFAULT_EDITOR.to_string())
+    std::env::var("SYNCRAFT_EDITOR").unwrap_or_else(|_| DEFAULT_EDITOR.to_string())
 }
 
 impl CommitMsg {
     fn new(paths: &SyncraftPaths) -> Self {
-        Self { file_path: paths.commit_msg() }
+        Self {
+            file_path: paths.commit_msg(),
+        }
     }
 
     fn create_default(&self, changes: &Vec<Change>) -> Result<(), Error> {
-
         let mut f = fs::File::create(&self.file_path)?;
         writeln!(f, "# Server update message.")?;
         writeln!(f, "# ")?;
         writeln!(f, "# Changes to be committed:")?;
         for change in changes {
             match &change {
-                Change::Added(path) => writeln!(f, "#   {:>8}: {}", "new file", path.to_string_lossy())?,
-                Change::Deleted(path) => writeln!(f, "#   {:>8}: {}", "deleted", path.to_string_lossy())?,
-                Change::Modified(path) => writeln!(f, "#   {:>8}: {}", "modified", path.to_string_lossy())?,
+                Change::Added(path) => {
+                    writeln!(f, "#   {:>8}: {}", "new file", path.to_string_lossy())?
+                }
+                Change::Deleted(path) => {
+                    writeln!(f, "#   {:>8}: {}", "deleted", path.to_string_lossy())?
+                }
+                Change::Modified(path) => {
+                    writeln!(f, "#   {:>8}: {}", "modified", path.to_string_lossy())?
+                }
                 Change::Renamed { from, to } => writeln!(
-                    f, "#   {:>8}: {} -> {}", "renamed",
-                    from.to_string_lossy(), to.to_string_lossy()
+                    f,
+                    "#   {:>8}: {} -> {}",
+                    "renamed",
+                    from.to_string_lossy(),
+                    to.to_string_lossy()
                 )?,
-                Change::Ignored => ()
+                Change::Ignored => (),
             };
         }
         writeln!(f, "# ")?;
@@ -343,22 +354,21 @@ impl CommitMsg {
     }
 
     fn edit(&self, editor: &str) -> Result<ExitStatus, Error> {
-        let status = Command::new(editor)
-            .arg(&self.file_path)
-            .status()?;
+        let status = Command::new(editor).arg(&self.file_path).status()?;
         Ok(status)
     }
 
     fn read(&self) -> Result<Option<String>, Error> {
-
-        let msg_lines: Vec<String> = fs::read_to_string(&self.file_path)?.lines()
-        .filter_map(|line| {
-            if line.starts_with("#") {
-                None
-            } else {
-                Some(line.to_string())
-            }
-        }).collect();
+        let msg_lines: Vec<String> = fs::read_to_string(&self.file_path)?
+            .lines()
+            .filter_map(|line| {
+                if line.starts_with("#") {
+                    None
+                } else {
+                    Some(line.to_string())
+                }
+            })
+            .collect();
 
         let msg = msg_lines.join("\n").trim().to_string();
 

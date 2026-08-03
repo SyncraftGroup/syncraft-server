@@ -6,12 +6,13 @@
 use std::fs;
 use std::path::PathBuf;
 
+use console_info::Ui;
+
 use crate::config::Config;
 use crate::error::Error;
 use crate::log_info;
+use crate::message::{MessageKey, translate};
 use crate::paths::SyncraftPaths;
-use crate::ui::message::MessageKey;
-use crate::ui::Ui;
 
 use super::ServiceManager;
 
@@ -37,9 +38,8 @@ impl ServiceManager for Systemd {
         let unit_path = user_unit_path()?;
 
         if let Some(parent) = unit_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                Error::Daemon(format!("Failed to create systemd user dir: {}", e))
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::Daemon(format!("Failed to create systemd user dir: {}", e)))?;
         }
 
         let unit = render_unit(paths);
@@ -52,8 +52,7 @@ impl ServiceManager for Systemd {
         })?;
         log_info!("Systemd unit written to {}", unit_path.display());
 
-        super::run_cmd("systemctl", &["--user", "daemon-reload"])
-            .map_err(|e| Error::Daemon(e))?;
+        super::run_cmd("systemctl", &["--user", "daemon-reload"]).map_err(|e| Error::Daemon(e))?;
         super::run_cmd("systemctl", &["--user", "enable", SERVICE_NAME])
             .map_err(|e| Error::Daemon(e))?;
         super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME])
@@ -61,7 +60,7 @@ impl ServiceManager for Systemd {
 
         let pid = query_pid().unwrap_or(0);
         log_info!("Systemd service installed and started (PID {pid})");
-        ui.ok(MessageKey::DaemonStarted { pid });
+        ui.ok(&translate(&MessageKey::DaemonStarted { pid }));
         Ok(())
     }
 
@@ -82,20 +81,20 @@ impl ServiceManager for Systemd {
 
         let _ = super::run_cmd("systemctl", &["--user", "daemon-reload"]);
         log_info!("Systemd service uninstalled");
-        Ui::get().ok(MessageKey::Done);
+        Ui::get().ok(&translate(&MessageKey::Done));
         Ok(())
     }
 
     fn start(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
-        if let Err(e) = super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME])
-        .map(|o| {
+        if let Err(e) = super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME]).map(|o| {
             if !o.trim().is_empty() {
                 log_info!("systemd: {}", o.trim());
-        }}) {
+            }
+        }) {
             if e.contains("not loaded") || e.contains("not found") {
-                Ui::get().error(MessageKey::DaemonNotInstalled);
+                Ui::get().error(&translate(&MessageKey::DaemonNotInstalled));
                 return Ok(());
             } else {
                 return Err(Error::Daemon(e));
@@ -103,8 +102,8 @@ impl ServiceManager for Systemd {
         }
 
         match query_pid() {
-            Some(pid) => ui.ok(MessageKey::DaemonStarted { pid }),
-            None => ui.warn(MessageKey::DaemonNotRunning),
+            Some(pid) => ui.ok(&translate(&MessageKey::DaemonStarted { pid })),
+            None => ui.warn(&translate(&MessageKey::DaemonNotRunning)),
         }
         Ok(())
     }
@@ -113,12 +112,12 @@ impl ServiceManager for Systemd {
         let ui = Ui::get();
 
         match super::run_cmd("systemctl", &["--user", "stop", SERVICE_NAME]) {
-            Ok(_) => ui.ok(MessageKey::DaemonStopped),
+            Ok(_) => ui.ok(&translate(&MessageKey::DaemonStopped)),
             Err(e) => {
                 if e.contains("not loaded") || e.contains("not running") {
-                    ui.info(MessageKey::DaemonNotRunning);
+                    ui.info(&translate(&MessageKey::DaemonNotRunning));
                 } else {
-                    ui.error(MessageKey::Failed { reason: e.clone() });
+                    ui.error(&translate(&MessageKey::Failed { reason: e.clone() }));
                     return Err(Error::Daemon(e));
                 }
             }
@@ -131,11 +130,19 @@ impl ServiceManager for Systemd {
 
         let show = match super::run_cmd(
             "systemctl",
-            &["--user", "show", "-p", "ActiveState", "-p", "MainPID", SERVICE_NAME],
+            &[
+                "--user",
+                "show",
+                "-p",
+                "ActiveState",
+                "-p",
+                "MainPID",
+                SERVICE_NAME,
+            ],
         ) {
             Ok(o) => o,
             Err(_) => {
-                ui.info(MessageKey::DaemonNotRunning);
+                ui.info(&translate(&MessageKey::DaemonNotRunning));
                 return Ok(());
             }
         };
@@ -147,7 +154,7 @@ impl ServiceManager for Systemd {
             .unwrap_or("unknown");
 
         if active != "active" {
-            ui.info(MessageKey::DaemonNotRunning);
+            ui.info(&translate(&MessageKey::DaemonNotRunning));
             return Ok(());
         }
 
@@ -163,12 +170,12 @@ impl ServiceManager for Systemd {
             .map(|c| format!("{}:{}", c.network.host.trim(), c.network.port))
             .unwrap_or_else(|| "unknown".into());
 
-        ui.info(MessageKey::DaemonStatus {
+        ui.info(&translate(&MessageKey::DaemonStatus {
             pid,
             uptime_secs,
             address,
             manager: "systemd",
-        });
+        }));
         Ok(())
     }
 

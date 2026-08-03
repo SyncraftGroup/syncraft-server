@@ -1,7 +1,7 @@
-pub mod models;
 pub mod db;
-pub mod routes;
 pub mod email;
+pub mod models;
+pub mod routes;
 pub mod sign;
 
 #[cfg(test)]
@@ -9,15 +9,22 @@ mod tests;
 
 use std::{collections::HashMap, sync::Arc};
 
-use axum::{Router, routing::{get, post, put}};
 use crate::log_debug;
 use crate::log_info;
+use axum::{
+    Router,
+    routing::{get, post, put},
+};
 use rsa::{pkcs1v15::SigningKey, pkcs8::EncodePublicKey};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use tokio::sync::Mutex;
 
-use crate::{error::Error, paths::SyncraftPaths, yggdrasil::{db::DBManager, email::Mailer, models::JoinRequestCache, sign::private_key}};
+use crate::{
+    error::Error,
+    paths::SyncraftPaths,
+    yggdrasil::{db::DBManager, email::Mailer, models::JoinRequestCache, sign::private_key},
+};
 
 /// Yggdrasil authentication server configuration (serialisable from the main config).
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -27,7 +34,7 @@ pub struct YggdrasilConfig {
     pub email: Option<Mailer>,
     pub base_url: String,
     pub skin_domains: Vec<String>,
-    pub identity_falsification: bool
+    pub identity_falsification: bool,
 }
 
 impl Default for YggdrasilConfig {
@@ -36,11 +43,8 @@ impl Default for YggdrasilConfig {
             server_name: None,
             email: None,
             base_url: "http://example.com/yggdrasil".into(),
-            skin_domains: vec![
-                "example.com".into(),
-                "littleskin.cn".into()
-            ],
-            identity_falsification: false
+            skin_domains: vec!["example.com".into(), "littleskin.cn".into()],
+            identity_falsification: false,
         }
     }
 }
@@ -55,8 +59,8 @@ pub struct YggdrasilState {
     pub base_url: String,
     /// HashMap<server_id, character_name>
     pub join_requests: Arc<Mutex<HashMap<String, JoinRequestCache>>>,
-    pub sign_key: SigningKey::<Sha1>,
-    pub public_pem: String
+    pub sign_key: SigningKey<Sha1>,
+    pub public_pem: String,
 }
 
 /// Initialise the Yggdrasil subsystem: open the database, load or generate the RSA
@@ -98,9 +102,18 @@ pub fn router(state: YggdrasilState) -> Router {
         .route("/authserver/signout", post(routes::signout))
         .route("/authserver/refresh", post(routes::refresh))
         .route("/sessionserver/session/minecraft/join", post(routes::join))
-        .route("/sessionserver/session/minecraft/hasJoined", get(routes::has_joined))
-        .route("/sessionserver/session/minecraft/profile/{uuid}", get(routes::profile))
+        .route(
+            "/sessionserver/session/minecraft/hasJoined",
+            get(routes::has_joined),
+        )
+        .route(
+            "/sessionserver/session/minecraft/profile/{uuid}",
+            get(routes::profile),
+        )
         .route("/textures/{hash}", get(routes::texture))
-        .route("/api/user/profile/{uuid}/{textureType}", put(routes::upload_texture).delete(routes::delete_skin))
+        .route(
+            "/api/user/profile/{uuid}/{textureType}",
+            put(routes::upload_texture).delete(routes::delete_skin),
+        )
         .with_state(state)
 }

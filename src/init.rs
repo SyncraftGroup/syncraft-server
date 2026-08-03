@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
 
+use console_info::Ui;
 use syncraft_protocol::{Loader, VersionInfo};
 
 use crate::config::Config;
 use crate::error::Error;
 use crate::git;
-use crate::paths::SyncraftPaths;
 use crate::log_debug;
 use crate::log_warn;
-use crate::ui::message::MessageKey;
-use crate::ui::Ui;
+use crate::message::{MessageKey, translate};
+use crate::paths::SyncraftPaths;
 use crate::yggdrasil;
 
 pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
@@ -19,23 +19,23 @@ pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
 
     if !looks_like_mc_server_dir(&paths.root())? {
         log_warn!("Not a Minecraft server directory");
-        ui.error(MessageKey::InitOutsideMinecraftServerDirectory);
+        ui.error(&translate(&MessageKey::InitOutsideMinecraftServerDirectory));
         return Ok(());
     }
 
     if paths.workspace().exists() {
-        if force && ui.confirm(MessageKey::CleanUpWorkSpaceConfirm)? {
+        if force && ui.confirm(&translate(&MessageKey::CleanUpWorkSpaceConfirm))? {
             cleanup_old_workspace(&paths)?;
-            ui.ok(MessageKey::Done);
+            ui.ok(&translate(&MessageKey::Done));
         } else {
-            ui.error(MessageKey::AlreadyInitialized);
+            ui.error(&translate(&MessageKey::AlreadyInitialized));
             return Ok(());
         }
     }
 
-    ui.step(MessageKey::Initializing);
+    ui.step(&translate(&MessageKey::Initializing));
 
-    let name = ui.input(MessageKey::InputServerName)?;
+    let name = ui.input(&translate(&MessageKey::InputServerName))?;
 
     let (vanilla_version, loader) = {
         let (vv, loader) = guess_version(paths.root());
@@ -43,7 +43,7 @@ pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
             log_debug!("Version guessed: MC {v}, loader {loader:?}");
             v
         } else {
-            ui.input(MessageKey::InputVanillaVersion)?
+            ui.input(&translate(&MessageKey::InputVanillaVersion))?
         };
         (vanilla_version, loader)
     };
@@ -61,12 +61,12 @@ pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
         version_info.loader
     );
 
-    ui.plain(MessageKey::VersionInfoDisplay(&version_info));
+    ui.plain(&translate(&MessageKey::VersionInfoDisplay(&version_info)));
 
-    if !ui.confirm(MessageKey::VersionInfoConfirm)?
-        && !ui.confirm(MessageKey::ContinueToInitializeConfirm)?
+    if !ui.confirm(&translate(&MessageKey::VersionInfoConfirm))?
+        && !ui.confirm(&translate(&MessageKey::ContinueToInitializeConfirm))?
     {
-        ui.warn(MessageKey::InitializationCancelled);
+        ui.warn(&translate(&MessageKey::InitializationCancelled));
         return Ok(());
     }
 
@@ -88,7 +88,7 @@ pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
 
     git::run(paths, Some(git::GitAction::Init))?;
 
-    ui.ok(MessageKey::InitializationFinished);
+    ui.ok(&translate(&MessageKey::InitializationFinished));
     log_debug!("Init completed successfully");
     Ok(())
 }

@@ -1,24 +1,45 @@
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
-use axum::{Json, extract::{Path, Query, State}, http::StatusCode, response::{IntoResponse, Response}};
-use axum_extra::{TypedHeader, extract::Multipart, headers::{Authorization, authorization::Bearer}};
-use chrono::{Duration, Utc};
-use crate::yggdrasil::{YggdrasilState, db::unsigned_uuid, models::{JoinRequestCache, requests::{HasJoinedQuery, JoinRequest, ProfileQuery, TextureUpload}, responses::{GameProfile, MetaResponse, YggdrasilMeta}}};
-use crate::yggdrasil::email::verify_email_string;
-use crate::yggdrasil::models::{Profile, TokenStatus, YggdrasilError, requests::{AuthenticateRequest, InvalidateRequest, RefreshRequest, RegisterRequest, SignoutRequest, ValidateRequest, VerifyQuery}, responses::{AuthenticateResponse, RefreshResponse, RegisterResponse}};
 use crate::error::Error;
+use crate::yggdrasil::email::verify_email_string;
+use crate::yggdrasil::models::{
+    Profile, TokenStatus, YggdrasilError,
+    requests::{
+        AuthenticateRequest, InvalidateRequest, RefreshRequest, RegisterRequest, SignoutRequest,
+        ValidateRequest, VerifyQuery,
+    },
+    responses::{AuthenticateResponse, RefreshResponse, RegisterResponse},
+};
+use crate::yggdrasil::{
+    YggdrasilState,
+    db::unsigned_uuid,
+    models::{
+        JoinRequestCache,
+        requests::{HasJoinedQuery, JoinRequest, ProfileQuery, TextureUpload},
+        responses::{GameProfile, MetaResponse, YggdrasilMeta},
+    },
+};
+use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use axum_extra::{
+    TypedHeader,
+    extract::Multipart,
+    headers::{Authorization, authorization::Bearer},
+};
+use chrono::{Duration, Utc};
 
-fn error_response(
-    status: StatusCode,
-    error: &str,
-    error_message: &str,
-) -> Response {
+fn error_response(status: StatusCode, error: &str, error_message: &str) -> Response {
     (
         status,
         Json(YggdrasilError {
             error: error.into(),
             error_message: error_message.into(),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 fn verify_password(password: &str, hash: &str) -> Result<bool, Error> {
@@ -29,23 +50,23 @@ fn verify_password(password: &str, hash: &str) -> Result<bool, Error> {
 }
 
 /// `GET /` — returns server metadata, skin domains, and the public signing key.
-pub async fn meta(
-    State(state): State<YggdrasilState>
-) -> impl IntoResponse {
+pub async fn meta(State(state): State<YggdrasilState>) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(MetaResponse {
             meta: YggdrasilMeta {
-                server_name: state.config.server_name.unwrap_or("syncraft-yggdrasil".into()),
+                server_name: state
+                    .config
+                    .server_name
+                    .unwrap_or("syncraft-yggdrasil".into()),
                 implementation_name: "syncraft-yggdrasil".into(),
-                implementation_version: "0.0.0".into()
+                implementation_version: "0.0.0".into(),
             },
             skin_domains: state.config.skin_domains,
-            signature_publickey: state.public_pem
-        })
+            signature_publickey: state.public_pem,
+        }),
     )
 }
-
 
 /// `POST /authserver/register`
 ///
@@ -53,13 +74,13 @@ pub async fn meta(
 /// If an email config is present, also sends a verification email.
 pub async fn register(
     State(state): State<YggdrasilState>,
-    Json(body): Json<RegisterRequest>
+    Json(body): Json<RegisterRequest>,
 ) -> impl IntoResponse {
-    let (user, code) = match state.db.create_user(
-        &body.username,
-        &body.password,
-        &body.character_name
-    ).await {
+    let (user, code) = match state
+        .db
+        .create_user(&body.username, &body.password, &body.character_name)
+        .await
+    {
         Ok(result) => result,
         Err(Error::Database(e)) if e.to_string().contains("UNIQUE") => {
             return error_response(
@@ -67,7 +88,7 @@ pub async fn register(
                 "UserAlreadyExists",
                 "An account with this email address already exists.",
             )
-            .into_response()
+            .into_response();
         }
         Err(_) => {
             return error_response(
@@ -75,20 +96,23 @@ pub async fn register(
                 "InternalError",
                 "Failed to create account.",
             )
-            .into_response()
+            .into_response();
         }
     };
 
     if let Some(mailer) = &state.config.email
-        && mailer.send_email(
-        &user.email,
-        verify_email_string(format!("{}/verify?code={}", state.base_url, code))
-        ).await.is_err()
+        && mailer
+            .send_email(
+                &user.email,
+                verify_email_string(format!("{}/verify?code={}", state.base_url, code)),
+            )
+            .await
+            .is_err()
     {
         return error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
-            "Failed to send verify email."
+            "Failed to send verify email.",
         );
     }
 
@@ -96,9 +120,10 @@ pub async fn register(
         StatusCode::CREATED,
         Json(RegisterResponse {
             id: user.id,
-            email: user.email
-        })
-    ).into_response()
+            email: user.email,
+        }),
+    )
+        .into_response()
 }
 
 /// `GET /verify?code=xxx`
@@ -106,7 +131,7 @@ pub async fn register(
 /// Verifies a user's email address using the code sent during registration.
 pub async fn verify(
     State(state): State<YggdrasilState>,
-    Query(query): Query<VerifyQuery>
+    Query(query): Query<VerifyQuery>,
 ) -> impl IntoResponse {
     match state.db.verify_email(&query.code).await {
         Ok(Some(_user_id)) => (
@@ -114,17 +139,20 @@ pub async fn verify(
             Json(serde_json::json!({
                 "message": "Email verified successfully."
             })),
-        ).into_response(),
+        )
+            .into_response(),
         Ok(None) => error_response(
             StatusCode::BAD_REQUEST,
             "InvalidVerificationCode",
             "The verification code is invalid or has already been used.",
-        ).into_response(),
+        )
+        .into_response(),
         Err(_) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
             "Failed to verify email.",
-        ).into_response(),
+        )
+        .into_response(),
     }
 }
 
@@ -134,9 +162,8 @@ pub async fn verify(
 /// On success returns a fresh `accessToken` / `clientToken` pair and the user's profiles.
 pub async fn authenticate(
     State(state): State<YggdrasilState>,
-    Json(body): Json<AuthenticateRequest>
+    Json(body): Json<AuthenticateRequest>,
 ) -> impl IntoResponse {
-
     // Look up user by email (the 'username' field holds the email address)
     let user = match state.db.find_user_by_email(&body.username).await {
         Ok(Some(user)) => user,
@@ -144,8 +171,8 @@ pub async fn authenticate(
             return error_response(
                 StatusCode::FORBIDDEN,
                 "ForbiddenOperationException",
-                "Invalid credentials. Invalid username or password."
-            )
+                "Invalid credentials. Invalid username or password.",
+            );
         }
     };
 
@@ -154,8 +181,8 @@ pub async fn authenticate(
         return error_response(
             StatusCode::FORBIDDEN,
             "ForbiddenOperationException",
-            "Email not verified. Please check your inbox."
-        )
+            "Email not verified. Please check your inbox.",
+        );
     }
 
     // Verify password
@@ -166,8 +193,8 @@ pub async fn authenticate(
         return error_response(
             StatusCode::FORBIDDEN,
             "ForbiddenOperationException",
-            "Invalid credentials. Invalid username or password."
-        )
+            "Invalid credentials. Invalid username or password.",
+        );
     };
 
     // Build the single profile (one-to-one: each user is their own character)
@@ -185,9 +212,10 @@ pub async fn authenticate(
                 access_token,
                 client_token,
                 available_profiles: vec![profile.clone()],
-                selected_profile: Some(profile)
-            })
-        ).into_response()
+                selected_profile: Some(profile),
+            }),
+        )
+            .into_response()
     } else {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -197,16 +225,14 @@ pub async fn authenticate(
     }
 }
 
-
 /// `POST /authserver/validate`
 ///
 /// Checks whether an `accessToken` (and optionally `clientToken`) is valid.
 /// Returns `204 No Content` on success, or a `403` error if the token is invalid.
 pub async fn validate(
     State(state): State<YggdrasilState>,
-    Json(body): Json<ValidateRequest>
+    Json(body): Json<ValidateRequest>,
 ) -> impl IntoResponse {
-
     let token_info =
     // Look up the token
     if let Ok(Some(info)) = state.db.get_token(&body.access_token).await
@@ -222,11 +248,12 @@ pub async fn validate(
 
     // If clientToken is provided, verify it matches
     if let Some(ref client_token) = body.client_token
-    && token_info.client_token != *client_token {
+        && token_info.client_token != *client_token
+    {
         return error_response(
             StatusCode::FORBIDDEN,
             "ForbiddenOperationException",
-            "Invalid token."
+            "Invalid token.",
         );
     }
 
@@ -239,9 +266,8 @@ pub async fn validate(
 /// Always returns `204 No Content` regardless of outcome.
 pub async fn invalidate(
     State(state): State<YggdrasilState>,
-    Json(body): Json<InvalidateRequest>
+    Json(body): Json<InvalidateRequest>,
 ) -> impl IntoResponse {
-
     // Best-effort deletion — ignore errors
     let _ = state.db.delete_token(&body.access_token).await;
 
@@ -254,18 +280,17 @@ pub async fn invalidate(
 /// Returns `204 No Content` on success.
 pub async fn signout(
     State(state): State<YggdrasilState>,
-    Json(body): Json<SignoutRequest>
+    Json(body): Json<SignoutRequest>,
 ) -> impl IntoResponse {
-
     // Look up user by email
-    let user = 
-    if let Ok(Some(user)) = state.db.find_user_by_email(&body.username).await { user }
-    else {
+    let user = if let Ok(Some(user)) = state.db.find_user_by_email(&body.username).await {
+        user
+    } else {
         return error_response(
             StatusCode::FORBIDDEN,
             "ForbiddenOperationException",
-            "Invalid credentials. Invalid username or password."
-        )
+            "Invalid credentials. Invalid username or password.",
+        );
     };
 
     // Verify password
@@ -276,8 +301,8 @@ pub async fn signout(
         return error_response(
             StatusCode::FORBIDDEN,
             "ForbiddenOperationException",
-            "Invalid credentials. Invalid username or password."
-        )
+            "Invalid credentials. Invalid username or password.",
+        );
     };
 
     // Delete all tokens for this user — best-effort
@@ -293,9 +318,8 @@ pub async fn signout(
 /// to the token's owner.
 pub async fn refresh(
     State(state): State<YggdrasilState>,
-    Json(body): Json<RefreshRequest>
+    Json(body): Json<RefreshRequest>,
 ) -> impl IntoResponse {
-
     let token_info =
     // Look up the token
     if let Ok(Some(info)) = state.db.get_token(&body.access_token).await
@@ -312,32 +336,35 @@ pub async fn refresh(
     };
 
     // With 1-to-1 binding, if selectedProfile is provided, its id must match the user_id
-    if let Some(ref profile) = body.selected_profile 
-    && profile.id != token_info.user_id {
+    if let Some(ref profile) = body.selected_profile
+        && profile.id != token_info.user_id
+    {
         return error_response(
             StatusCode::FORBIDDEN,
             "ForbiddenOperationException",
-            "Invalid token."
+            "Invalid token.",
         );
     }
 
     // Create a new accessToken with the same clientToken
     if let Ok(access_token) = state.db.refresh_token(&token_info.client_token, &token_info.user_id).await
     // Look up the profile from the users table
-    && let Ok(Some(profile)) = state.db.get_profile_for_user(&token_info.user_id).await {
+    && let Ok(Some(profile)) = state.db.get_profile_for_user(&token_info.user_id).await
+    {
         (
             StatusCode::OK,
             Json(RefreshResponse {
                 access_token,
                 client_token: token_info.client_token,
-                selected_profile: Some(profile)
-            })
-        ).into_response()
+                selected_profile: Some(profile),
+            }),
+        )
+            .into_response()
     } else {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
-            "Failed to create new token."
+            "Failed to create new token.",
         )
     }
 }
@@ -348,9 +375,8 @@ pub async fn refresh(
 /// 5 minutes so the server can verify it via `hasJoined`.
 pub async fn join(
     State(state): State<YggdrasilState>,
-    Json(body): Json<JoinRequest>
+    Json(body): Json<JoinRequest>,
 ) -> impl IntoResponse {
-
     let token_info =
     // Look up the token
     if let Ok(Some(info)) = state.db.get_token(&body.access_token).await
@@ -365,12 +391,13 @@ pub async fn join(
     };
 
     // With 1-to-1 binding, the selectedProfile's id must match the user_id
-    if let Some(ref profile) = body.selected_profile 
-    && profile.id != token_info.user_id {
+    if let Some(ref profile) = body.selected_profile
+        && profile.id != token_info.user_id
+    {
         return error_response(
             StatusCode::BAD_REQUEST,
             "IllegalArgumentException",
-            "Access token already has a profile assigned."
+            "Access token already has a profile assigned.",
         );
     }
 
@@ -382,8 +409,8 @@ pub async fn join(
                 JoinRequestCache {
                     user_id: token_info.user_id,
                     character_name: profile.name,
-                    timestamp: chrono::Utc::now()
-                }
+                    timestamp: chrono::Utc::now(),
+                },
             );
         }
         // Success
@@ -392,7 +419,7 @@ pub async fn join(
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
-            "Failed to get profile."
+            "Failed to get profile.",
         )
     }
 }
@@ -402,9 +429,8 @@ pub async fn join(
 /// Called by a game server to verify that a joining player has a valid session.
 pub async fn has_joined(
     State(state): State<YggdrasilState>,
-    Query(query): Query<HasJoinedQuery>
+    Query(query): Query<HasJoinedQuery>,
 ) -> impl IntoResponse {
-    
     let (profile, is_fake) =
     // Get cached join request
     if let Some(req) = {
@@ -433,8 +459,9 @@ pub async fn has_joined(
 
     (
         StatusCode::OK,
-        Json(GameProfile::generate(state, profile, is_fake).await)
-    ).into_response()
+        Json(GameProfile::generate(state, profile, is_fake).await),
+    )
+        .into_response()
 }
 
 /// `GET /textures/{hash}`
@@ -442,21 +469,14 @@ pub async fn has_joined(
 /// Returns the raw skin PNG for the given texture hash.
 pub async fn texture(
     State(state): State<YggdrasilState>,
-    Path(hash): Path<String>
+    Path(hash): Path<String>,
 ) -> impl IntoResponse {
     if let Ok(Some(data)) = state.db.get_skin_data(&hash).await {
-        (
-            [(axum::http::header::CONTENT_TYPE, "image/png")],
-            data
-        ).into_response()
+        ([(axum::http::header::CONTENT_TYPE, "image/png")], data).into_response()
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            "Not Found"
-        ).into_response()
+        (StatusCode::NOT_FOUND, "Not Found").into_response()
     }
 }
-
 
 /// `PUT /api/user/profile/{uuid}/{textureType}`
 ///
@@ -465,9 +485,8 @@ pub async fn upload_texture(
     State(state): State<YggdrasilState>,
     Path((id, skin_type)): Path<(String, String)>,
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
-    multipart: Multipart
+    multipart: Multipart,
 ) -> impl IntoResponse {
-
     // Only skin is supported for now.
     if skin_type != "skin" {
         return StatusCode::BAD_REQUEST.into_response();
@@ -485,19 +504,24 @@ pub async fn upload_texture(
         return StatusCode::BAD_REQUEST.into_response();
     };
 
-    let upload = 
-    if let Ok(upload) = TextureUpload::from_multipart(multipart).await { upload }
-    else {
+    let upload = if let Ok(upload) = TextureUpload::from_multipart(multipart).await {
+        upload
+    } else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    
-    if state.db.set_skin(&token_info.user_id, upload.data, upload.skin_type).await.is_ok() {
+
+    if state
+        .db
+        .set_skin(&token_info.user_id, upload.data, upload.skin_type)
+        .await
+        .is_ok()
+    {
         StatusCode::NO_CONTENT.into_response()
     } else {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
-            "Failed to set the skin."
+            "Failed to set the skin.",
         )
     }
 }
@@ -508,9 +532,8 @@ pub async fn upload_texture(
 pub async fn delete_skin(
     State(state): State<YggdrasilState>,
     Path((id, skin_type)): Path<(String, String)>,
-    TypedHeader(auth): TypedHeader<Authorization<Bearer>>
+    TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
 ) -> impl IntoResponse {
-
     // Only skin is supported for now.
     if skin_type != "skin" {
         return StatusCode::BAD_REQUEST.into_response();
@@ -534,7 +557,7 @@ pub async fn delete_skin(
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "InternalError",
-            "Failed to remove the skin."
+            "Failed to remove the skin.",
         )
     }
 }
@@ -546,17 +569,17 @@ pub async fn delete_skin(
 pub async fn profile(
     State(state): State<YggdrasilState>,
     Path(id): Path<String>,
-    Query(query): Query<ProfileQuery>
+    Query(query): Query<ProfileQuery>,
 ) -> impl IntoResponse {
-
     #[allow(unused_variables)]
     let unsigned = query.unsigned.unwrap_or(false);
 
     if let Ok(Some(profile)) = state.db.get_profile_for_user(&id).await {
         (
             StatusCode::OK,
-            Json(GameProfile::generate(state, profile, false).await)
-        ).into_response()
+            Json(GameProfile::generate(state, profile, false).await),
+        )
+            .into_response()
     } else {
         StatusCode::NO_CONTENT.into_response()
     }

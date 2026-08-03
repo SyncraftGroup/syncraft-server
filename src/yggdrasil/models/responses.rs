@@ -2,13 +2,17 @@ use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
 
-use crate::yggdrasil::{YggdrasilState, models::{Profile, YggdrasilSkinType}, sign::sign};
+use crate::yggdrasil::{
+    YggdrasilState,
+    models::{Profile, YggdrasilSkinType},
+    sign::sign,
+};
 
 /// `POST /authserver/register` response body.
 #[derive(Debug, Serialize)]
 pub struct RegisterResponse {
     pub id: String,
-    pub email: String
+    pub email: String,
 }
 
 /// `POST /authserver/authenticate` response body.
@@ -39,24 +43,28 @@ pub struct RefreshResponse {
 pub struct GameProfile {
     pub id: String,
     pub name: String,
-    pub properties: Vec<Property>
+    pub properties: Vec<Property>,
 }
 
 impl GameProfile {
     pub async fn generate(state: YggdrasilState, profile: Profile, is_fake: bool) -> Self {
-        let (skin_url, skin_type) = 
-        if !is_fake
-        && let Ok(Some((hash, skin_type))) = state.db.get_user_skin_meta(&profile.id).await {
+        let (skin_url, skin_type) = if !is_fake
+            && let Ok(Some((hash, skin_type))) = state.db.get_user_skin_meta(&profile.id).await
+        {
             (format!("{}/textures/{}", state.base_url, hash), skin_type)
-        } else if let Ok((skin_type, url)) = mc_skin::get_skin_url(&profile.name, mc_skin::SkinSource::Mojang).await {
+        } else if let Ok((skin_type, url)) =
+            mc_skin::get_skin_url(&profile.name, mc_skin::SkinSource::Mojang).await
+        {
             (url, YggdrasilSkinType::from(skin_type))
-        } else if let Ok((skin_type, url)) = mc_skin::get_skin_url(&profile.name, mc_skin::SkinSource::LittleSkin).await {
+        } else if let Ok((skin_type, url)) =
+            mc_skin::get_skin_url(&profile.name, mc_skin::SkinSource::LittleSkin).await
+        {
             (url, YggdrasilSkinType::from(skin_type))
         } else {
             return Self {
                 id: profile.id,
                 name: profile.name,
-                properties: vec![]
+                properties: vec![],
             };
         };
 
@@ -80,13 +88,11 @@ impl GameProfile {
         Self {
             id: profile.id.clone(),
             name: profile.name.clone(),
-            properties: vec![
-                Property {
-                    name: "textures".into(),
-                    value,
-                    signature
-                }
-            ]
+            properties: vec![Property {
+                name: "textures".into(),
+                value,
+                signature,
+            }],
         }
     }
 }
@@ -97,7 +103,7 @@ pub struct Property {
     /// Base64-encoded JSON texture payload.
     pub value: String,
     /// Base64-encoded RSA signature of `value`.
-    pub signature: String
+    pub signature: String,
 }
 
 /// `GET /` root metadata response.
@@ -107,7 +113,7 @@ pub struct MetaResponse {
     #[serde(rename = "skinDomains")]
     pub skin_domains: Vec<String>,
     #[serde(rename = "signaturePublickey")]
-    pub signature_publickey: String
+    pub signature_publickey: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,5 +123,5 @@ pub struct YggdrasilMeta {
     #[serde(rename = "implementationName")]
     pub implementation_name: String,
     #[serde(rename = "implementationVersion")]
-    pub implementation_version: String
+    pub implementation_version: String,
 }

@@ -8,15 +8,16 @@ use std::io;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
+use console_info::Ui;
+
 use crate::config::Config;
 use crate::daemon::SyncraftServer;
+use crate::error::Error;
 use crate::log_error;
 use crate::log_info;
 use crate::log_warn;
-use crate::error::Error;
+use crate::message::{MessageKey, translate};
 use crate::paths::SyncraftPaths;
-use crate::ui::message::MessageKey;
-use crate::ui::Ui;
 
 use super::ServiceManager;
 
@@ -33,12 +34,14 @@ impl ServiceManager for Fallback {
 
     fn install(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
         let ui = Ui::get();
-        ui.error(MessageKey::DaemonInstallUnsupported);
-        Err(Error::Daemon("install not available in fallback mode".into()))
+        ui.error(&translate(&MessageKey::DaemonInstallUnsupported));
+        Err(Error::Daemon(
+            "install not available in fallback mode".into(),
+        ))
     }
 
     fn uninstall(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
-        Ui::get().info(MessageKey::DaemonNotRunning);
+        Ui::get().info(&translate(&MessageKey::DaemonNotRunning));
         Ok(())
     }
 
@@ -49,15 +52,15 @@ impl ServiceManager for Fallback {
     fn start(&self, paths: &SyncraftPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
-        let config =
-        if let Some(config) = Config::load(paths) { config }
-        else {
-            ui.error(MessageKey::Uninitialized);
+        let config = if let Some(config) = Config::load(paths) {
+            config
+        } else {
+            ui.error(&translate(&MessageKey::Uninitialized));
             std::process::exit(0);
         };
 
         if pid_file_alive(paths) {
-            ui.warn(MessageKey::DaemonAlreadyRunning);
+            ui.warn(&translate(&MessageKey::DaemonAlreadyRunning));
             std::process::exit(0);
         }
 
@@ -97,21 +100,21 @@ impl ServiceManager for Fallback {
             .await
             {
                 Ok(crate::daemon::ipc::IpcResponse::Ok) => {
-                    Ui::get().ok(MessageKey::DaemonStopped);
+                    Ui::get().ok(&translate(&MessageKey::DaemonStopped));
                 }
                 Ok(crate::daemon::ipc::IpcResponse::Error { message }) => {
                     log_error!("Daemon reported error: {}", message);
-                    Ui::get().error(MessageKey::Failed { reason: message });
+                    Ui::get().error(&translate(&MessageKey::Failed { reason: message }));
                 }
                 Err(e) => {
                     let reason = e.to_string();
                     log_warn!("Failed to contact daemon: {}", reason);
-                    Ui::get().error(MessageKey::DaemonIpcError { reason });
+                    Ui::get().error(&translate(&MessageKey::DaemonIpcError { reason }));
                     if let Ok(pid_str) = fs::read_to_string(paths.pid_file()) {
-                        Ui::get().warn(MessageKey::DaemonStalePid {
+                        Ui::get().warn(&translate(&MessageKey::DaemonStalePid {
                             pid: pid_str.trim().to_string(),
                             pid_file: paths.pid_file().display().to_string(),
-                        });
+                        }));
                     }
                 }
                 _ => {
@@ -139,21 +142,21 @@ impl ServiceManager for Fallback {
                     let address = Config::load(paths)
                         .map(|c| format!("{}:{}", c.network.host.trim(), c.network.port))
                         .unwrap_or_else(|| "unknown".into());
-                    Ui::get().info(MessageKey::DaemonStatus {
+                    Ui::get().info(&translate(&MessageKey::DaemonStatus {
                         pid,
                         uptime_secs,
                         address,
                         manager: "fallback",
-                    });
+                    }));
                 }
                 Ok(crate::daemon::ipc::IpcResponse::Error { message }) => {
                     log_error!("Daemon reports error: {}", message);
                 }
                 Err(_) => {
                     if pid_file_alive(paths) {
-                        Ui::get().warn(MessageKey::DaemonAlreadyRunning);
+                        Ui::get().warn(&translate(&MessageKey::DaemonAlreadyRunning));
                     } else {
-                        Ui::get().info(MessageKey::DaemonNotRunning);
+                        Ui::get().info(&translate(&MessageKey::DaemonNotRunning));
                         let _ = fs::remove_file(paths.pid_file());
                         let _ = fs::remove_file(paths.socket_path());
                     }
@@ -219,7 +222,9 @@ fn daemonize(pid_file: &std::path::Path, log_file: &std::path::Path) {
     let _ = fs::write(pid_file, pid.to_string());
 
     let _ = std::env::set_current_dir("/");
-    unsafe { libc::umask(0o022); }
+    unsafe {
+        libc::umask(0o022);
+    }
 
     redirect_stdio(log_file);
 

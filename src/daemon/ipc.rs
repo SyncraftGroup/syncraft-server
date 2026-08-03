@@ -5,14 +5,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
-use syncraft_protocol::{FileState, Manifest, SyncFile, SyncMode};
 use crate::config::Config;
 use crate::daemon::SyncraftServer;
 use crate::git::Change;
 use crate::log_debug;
 use crate::log_error;
 use crate::log_info;
+use serde::{Deserialize, Serialize};
+use syncraft_protocol::{FileState, Manifest, SyncFile, SyncMode};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -28,7 +28,7 @@ pub enum IpcRequest {
     #[serde(rename = "status")]
     Status,
     #[serde(rename = "update")]
-    Update
+    Update,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,21 +39,13 @@ pub enum IpcResponse {
     #[serde(rename = "ok")]
     Ok,
     #[serde(rename = "status")]
-    Status {
-        pid: u32,
-        uptime_secs: u64,
-    },
+    Status { pid: u32, uptime_secs: u64 },
     #[serde(rename = "error")]
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 /// Connect to the daemon's IPC socket, send a request, and return the response.
-pub async fn send_request(
-    socket_path: &Path,
-    request: &IpcRequest,
-) -> Result<IpcResponse, Error> {
+pub async fn send_request(socket_path: &Path, request: &IpcRequest) -> Result<IpcResponse, Error> {
     let stream = UnixStream::connect(socket_path).await.map_err(|e| {
         Error::Daemon(format!(
             "Failed to connect to daemon at {}: {}",
@@ -64,30 +56,31 @@ pub async fn send_request(
 
     let (reader, mut writer) = stream.into_split();
 
-    let mut json = serde_json::to_string(request).map_err(|e| {
-        Error::Daemon(format!("Failed to serialize IPC request: {}", e))
-    })?;
+    let mut json = serde_json::to_string(request)
+        .map_err(|e| Error::Daemon(format!("Failed to serialize IPC request: {}", e)))?;
     json.push('\n');
-    writer.write_all(json.as_bytes()).await.map_err(|e| {
-        Error::Daemon(format!("Failed to send IPC request: {}", e))
-    })?;
-    writer.shutdown().await.map_err(|e| {
-        Error::Daemon(format!("Failed to shutdown write side: {}", e))
-    })?;
+    writer
+        .write_all(json.as_bytes())
+        .await
+        .map_err(|e| Error::Daemon(format!("Failed to send IPC request: {}", e)))?;
+    writer
+        .shutdown()
+        .await
+        .map_err(|e| Error::Daemon(format!("Failed to shutdown write side: {}", e)))?;
 
     let mut buf_reader = BufReader::new(reader);
     let mut line = String::new();
-    buf_reader.read_line(&mut line).await.map_err(|e| {
-        Error::Daemon(format!("Failed to read IPC response: {}", e))
-    })?;
+    buf_reader
+        .read_line(&mut line)
+        .await
+        .map_err(|e| Error::Daemon(format!("Failed to read IPC response: {}", e)))?;
 
     if line.is_empty() {
         return Err(Error::Daemon("Empty IPC response from daemon".into()));
     }
 
-    serde_json::from_str(&line).map_err(|e| {
-        Error::Daemon(format!("Failed to parse IPC response: {}", e))
-    })
+    serde_json::from_str(&line)
+        .map_err(|e| Error::Daemon(format!("Failed to parse IPC response: {}", e)))
 }
 
 /// Check whether the daemon is alive and responsive.
@@ -126,14 +119,14 @@ fn pid_file_alive(pid_file: &Path) -> bool {
     }
 }
 
-async fn send_response(
-    writer: &mut (impl AsyncWriteExt + Unpin),
-    response: &IpcResponse,
-) {
+async fn send_response(writer: &mut (impl AsyncWriteExt + Unpin), response: &IpcResponse) {
     let mut json = match serde_json::to_string(response) {
         Ok(j) => j,
         Err(e) => {
-            format!(r#"{{"type":"error","message":"Failed to serialize response: {}"}}"#, e)
+            format!(
+                r#"{{"type":"error","message":"Failed to serialize response: {}"}}"#,
+                e
+            )
         }
     };
     json.push('\n');
@@ -143,9 +136,9 @@ async fn send_response(
 
 impl SyncraftServer {
     pub async fn run_ipc(self: Arc<Self>) -> Result<(), Error>
-    where Self: Send + 'static
+    where
+        Self: Send + 'static,
     {
-
         let socket_path = self.paths.socket_path();
         let shutdown = self.shutdown.clone();
 
@@ -205,7 +198,8 @@ impl SyncraftServer {
         pid: u32,
         start_time: Instant,
     ) -> impl std::future::Future<Output = ()> + Send
-    where Self: Sync
+    where
+        Self: Sync,
     {
         async move {
             let (reader, mut writer) = stream.into_split();
@@ -219,9 +213,13 @@ impl SyncraftServer {
             let request: IpcRequest = match serde_json::from_str(&line) {
                 Ok(req) => req,
                 Err(e) => {
-                    send_response(&mut writer, &IpcResponse::Error {
-                        message: format!("Invalid request: {}", e),
-                    }).await;
+                    send_response(
+                        &mut writer,
+                        &IpcResponse::Error {
+                            message: format!("Invalid request: {}", e),
+                        },
+                    )
+                    .await;
                     return;
                 }
             };
@@ -238,7 +236,9 @@ impl SyncraftServer {
                 }
                 IpcRequest::Update => {
                     if let Err(e) = self.update().await {
-                        IpcResponse::Error { message: e.to_string() }
+                        IpcResponse::Error {
+                            message: e.to_string(),
+                        }
                     } else {
                         IpcResponse::Ok
                     }
@@ -250,42 +250,51 @@ impl SyncraftServer {
     }
 
     async fn update(self: Arc<Self>) -> Result<(), Error> {
-        let changes = {
-            self.repository.lock().await.status()?
-        };
+        let changes = { self.repository.lock().await.status()? };
 
         let mut to_update = Vec::new();
 
         for change in changes {
             match change {
-                Change::Added(path)
-                | Change::Modified(path) => {
+                Change::Added(path) | Change::Modified(path) => {
                     let state = FileState::from_path(&path).await?;
                     let mode = infer_sync_mode(&path, &self.config);
                     to_update.push((
                         path,
-                        SyncFile { state: Some(state), mode }
+                        SyncFile {
+                            state: Some(state),
+                            mode,
+                        },
                     ));
                 }
                 Change::Renamed { from, to } => {
                     to_update.push((
                         from,
-                        SyncFile { state: None, mode: SyncMode::Forbidden }
+                        SyncFile {
+                            state: None,
+                            mode: SyncMode::Forbidden,
+                        },
                     ));
                     let state = FileState::from_path(&to).await?;
                     let mode = infer_sync_mode(&to, &self.config);
                     to_update.push((
                         to,
-                        SyncFile { state: Some(state), mode }
+                        SyncFile {
+                            state: Some(state),
+                            mode,
+                        },
                     ));
                 }
                 Change::Deleted(path) => {
                     to_update.push((
                         path,
-                        SyncFile { state: None, mode: SyncMode::Forbidden }
+                        SyncFile {
+                            state: None,
+                            mode: SyncMode::Forbidden,
+                        },
                     ));
                 }
-                _ => ()
+                _ => (),
             }
         }
 
@@ -307,7 +316,11 @@ impl SyncraftServer {
         let manifest = {
             let version_hash = self.repository.lock().await.latest_hash()?.to_string();
             let version = self.config.info.clone();
-            Arc::new(Manifest { version_hash, version, files })
+            Arc::new(Manifest {
+                version_hash,
+                version,
+                files,
+            })
         };
         *self.manifest.write().await = manifest;
 
@@ -317,7 +330,7 @@ impl SyncraftServer {
 
 fn infer_sync_mode(path: &Path, config: &Config) -> SyncMode {
     for object in &config.sync {
-        if object.path.starts_with(path) {
+        if object.source.starts_with(path) {
             return object.mode.clone();
         }
     }
