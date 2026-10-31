@@ -8,16 +8,17 @@ mod init;
 mod log;
 mod message;
 mod paths;
+mod server;
 mod yggdrasil;
 
 use clap::{Parser, Subcommand};
 
 use crate::account::AccountAction;
 use crate::authlib::AuthlibAction;
-use crate::daemon::ServeAction;
+use crate::daemon::DaemonAction;
 use crate::error::Error;
 use crate::git::GitAction;
-use crate::paths::SyncraftPaths;
+use crate::paths::{GlobalPaths, SyncraftPaths};
 
 #[derive(Parser)]
 #[command(
@@ -38,12 +39,15 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Manage the syncraft server daemon.
-    ///
-    /// Without a subcommand, defaults to `start`.
-    Serve {
+    /// Manage the syncraft daemon (independent of any single server)
+    Daemon {
         #[command(subcommand)]
-        action: Option<ServeCommand>,
+        action: DaemonCommand,
+    },
+    /// Register / list Minecraft server roots managed by the daemon
+    Server {
+        #[command(subcommand)]
+        action: ServerCommand,
     },
     /// Git commands
     Git {
@@ -67,15 +71,15 @@ enum Command {
 }
 
 #[derive(Subcommand, Clone, Copy, Debug, PartialEq, Eq)]
-enum ServeCommand {
-    /// Start the server daemon
+enum DaemonCommand {
+    /// Start the daemon in the background (systemd or fallback double-fork)
     Start,
-    /// Stop a running daemon
+    /// Stop the running daemon
     Stop,
-    /// Query daemon status
+    /// Show daemon and registered server status
     Status,
-    /// Run the server in the foreground (development / debug)
-    Run,
+    /// Run the daemon in the foreground (systemd ExecStart / debugging)
+    Foreground,
     /// Install as a platform service (systemd user unit on Linux)
     Install,
     /// Remove the platform service
@@ -84,18 +88,35 @@ enum ServeCommand {
     Logs,
 }
 
-impl From<ServeCommand> for ServeAction {
-    fn from(cmd: ServeCommand) -> Self {
+impl From<DaemonCommand> for DaemonAction {
+    fn from(cmd: DaemonCommand) -> Self {
         match cmd {
-            ServeCommand::Start => ServeAction::Start,
-            ServeCommand::Stop => ServeAction::Stop,
-            ServeCommand::Status => ServeAction::Status,
-            ServeCommand::Run => ServeAction::Run,
-            ServeCommand::Install => ServeAction::Install,
-            ServeCommand::Uninstall => ServeAction::Uninstall,
-            ServeCommand::Logs => ServeAction::Logs,
+            DaemonCommand::Start => DaemonAction::Start,
+            DaemonCommand::Stop => DaemonAction::Stop,
+            DaemonCommand::Status => DaemonAction::Status,
+            DaemonCommand::Foreground => DaemonAction::Foreground,
+            DaemonCommand::Install => DaemonAction::Install,
+            DaemonCommand::Uninstall => DaemonAction::Uninstall,
+            DaemonCommand::Logs => DaemonAction::Logs,
         }
     }
+}
+
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+enum ServerCommand {
+    /// Register a Minecraft server directory (must be initialized first)
+    Add {
+        /// Server directory (defaults to the current directory)
+        #[arg(default_value = ".")]
+        path: std::path::PathBuf,
+        /// Tenant name (defaults to `info.id` from syncraft.toml)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Unregister a server by name or path
+    Remove { server: String },
+    /// List registered servers
+    List,
 }
 
 #[derive(Subcommand, Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,14 +202,23 @@ fn main() -> Result<(), Error> {
     let cwd = std::env::current_dir()?;
     log_debug!("Working directory: {}", cwd.display());
     let paths = SyncraftPaths::new(cwd);
+    let global = GlobalPaths::discover();
 
     match cli.command {
         Command::Init { force } => {
             init::run(paths, force)?;
         }
-        Command::Serve { action } => {
-            let action: Option<ServeAction> = action.map(Into::into);
-            daemon::handle_command(&paths, action.as_ref())?;
+        Command::Daemon { action } => {
+            let action: DaemonAction = action.into();
+            daemon::handle_command(&global, &action)?;
+        }
+        Command::Server { action } => {
+            let action = match action {
+                ServerCommand::Add { path, name } => server::ServerAction::Add { path, name },
+                ServerCommand::Remove { server } => server::ServerAction::Remove { key: server },
+                ServerCommand::List => server::ServerAction::List,
+            };
+            server::run(&global, action)?;
         }
         Command::Git { action } => {
             let action: Option<GitAction> = action.map(Into::into);
@@ -198,7 +228,7 @@ fn main() -> Result<(), Error> {
             git::run(paths, Some(GitAction::Publish))?;
         }
         Command::Status => {
-            daemon::handle_command(&paths, Some(&ServeAction::Status))?;
+            daemon::handle_command(&global, &DaemonAction::Status)?;
         }
         Command::Account { action } => {
             let action: AccountAction = action.into();

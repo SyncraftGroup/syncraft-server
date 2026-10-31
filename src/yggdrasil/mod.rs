@@ -23,7 +23,12 @@ use tokio::sync::Mutex;
 use crate::{
     error::Error,
     paths::SyncraftPaths,
-    yggdrasil::{db::DBManager, email::Mailer, models::JoinRequestCache, sign::private_key},
+    yggdrasil::{
+        db::DBManager,
+        email::{EmailTemplate, Mailer},
+        models::JoinRequestCache,
+        sign::private_key,
+    },
 };
 
 /// Yggdrasil authentication server configuration (serialisable from the main config).
@@ -65,6 +70,8 @@ pub struct YggdrasilState {
     pub join_requests: Arc<Mutex<HashMap<String, JoinRequestCache>>>,
     pub sign_key: SigningKey<Sha1>,
     pub public_pem: String,
+    /// Verification email body (built-in or overridden by `verify-email.html`).
+    pub email_template: EmailTemplate,
 }
 
 /// Initialise the Yggdrasil subsystem: open the database, load or generate the RSA
@@ -90,6 +97,7 @@ pub async fn init(paths: &SyncraftPaths, config: &YggdrasilConfig) -> Result<Rou
         join_requests: Arc::new(Mutex::new(HashMap::new())),
         sign_key: SigningKey::new(private_key),
         public_pem,
+        email_template: EmailTemplate::load(&paths.email_template()),
     };
 
     Ok(router(state))

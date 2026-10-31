@@ -1,11 +1,15 @@
 //! IPC over Unix domain sockets using newline-delimited JSON.
+//!
+//! The socket is global (`$XDG_DATA_HOME/syncraft/daemon.sock`): the daemon
+//! manages every registered server, so commands identify the target server by
+//! name or path.
 
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::daemon::SyncraftServer;
+use crate::daemon::Daemon;
 use crate::log_debug;
 use crate::log_error;
 use crate::log_info;
@@ -24,8 +28,22 @@ pub enum IpcRequest {
     Stop,
     #[serde(rename = "status")]
     Status,
+    /// Re-read the registry and add/remove tenants.
+    #[serde(rename = "reload")]
+    Reload,
+    /// Rebuild one server's manifest after `git publish`.
     #[serde(rename = "update")]
-    Update,
+    Update {
+        /// Server name or root path.
+        server: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerStatus {
+    pub name: String,
+    pub path: String,
+    pub address: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,7 +54,11 @@ pub enum IpcResponse {
     #[serde(rename = "ok")]
     Ok,
     #[serde(rename = "status")]
-    Status { pid: u32, uptime_secs: u64 },
+    Status {
+        pid: u32,
+        uptime_secs: u64,
+        servers: Vec<ServerStatus>,
+    },
     #[serde(rename = "error")]
     Error { message: String },
 }
@@ -131,12 +153,9 @@ async fn send_response(writer: &mut (impl AsyncWriteExt + Unpin), response: &Ipc
     let _ = writer.shutdown().await;
 }
 
-impl SyncraftServer {
-    pub async fn run_ipc(self: Arc<Self>) -> Result<(), Error>
-    where
-        Self: Send + 'static,
-    {
-        let socket_path = self.paths.socket_path();
+impl Daemon {
+    pub(crate) async fn run_ipc(self: Arc<Self>) -> Result<(), Error> {
+        let socket_path = self.global.socket_path();
         let shutdown = self.shutdown.clone();
 
         if socket_path.exists() {
@@ -156,7 +175,7 @@ impl SyncraftServer {
                 e
             ))
         })?;
-        // The control socket accepts `stop` / `update`; keep it private.
+        // The control socket accepts `stop` / `update` / `reload`; keep it private.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -233,37 +252,29 @@ impl SyncraftServer {
                     self.shutdown.trigger();
                     IpcResponse::Ok
                 }
+                IpcRequest::Reload => match self.reload().await {
+                    Ok(()) => IpcResponse::Ok,
+                    Err(e) => IpcResponse::Error {
+                        message: e.to_string(),
+                    },
+                },
+                IpcRequest::Update { server } => match self.update_server(&server).await {
+                    Ok(()) => IpcResponse::Ok,
+                    Err(e) => IpcResponse::Error {
+                        message: e.to_string(),
+                    },
+                },
                 IpcRequest::Status => {
                     let uptime_secs = start_time.elapsed().as_secs();
-                    IpcResponse::Status { pid, uptime_secs }
-                }
-                IpcRequest::Update => {
-                    if let Err(e) = self.update().await {
-                        IpcResponse::Error {
-                            message: e.to_string(),
-                        }
-                    } else {
-                        IpcResponse::Ok
+                    IpcResponse::Status {
+                        pid,
+                        uptime_secs,
+                        servers: self.status_entries().await,
                     }
                 }
             };
 
             send_response(&mut writer, &response).await;
         }
-    }
-
-    /// Rebuild the manifest from the current on-disk state.
-    ///
-    /// `git publish` commits before calling this, so deriving the changed files
-    /// from `git status()` would always yield an empty list.
-    pub(crate) async fn update(self: Arc<Self>) -> Result<(), Error> {
-        self.rebuild_manifest().await?;
-        let manifest = self.manifest.read().await.clone();
-        log_info!(
-            "Manifest updated ({} files, version {})",
-            manifest.files.len(),
-            manifest.version_hash
-        );
-        Ok(())
     }
 }

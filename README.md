@@ -22,8 +22,8 @@ cargo install --path syncraft-server --locked --force
 syncraft --version
 ```
 
-`syncraft serve install` 生成的 systemd 单元使用 `current_exe`，因此重装到同一路径后，
-已经注册的服务会直接使用新版本，无需重新执行 `serve install`。
+`syncraft daemon install` 生成的 systemd 单元使用 `current_exe`，因此重装到同一路径后，
+已经注册的服务会直接使用新版本，无需重新执行 `daemon install`。
 
 ## 指定安装目录
 

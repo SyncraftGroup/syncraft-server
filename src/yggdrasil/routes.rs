@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::yggdrasil::email::verify_email_string;
+use crate::yggdrasil::email::VerifyEmail;
 use crate::yggdrasil::models::{
     Profile, TokenStatus, YggdrasilError,
     requests::{
@@ -100,20 +100,22 @@ pub async fn register(
         }
     };
 
-    if let Some(mailer) = &state.config.email
-        && mailer
-            .send_email(
-                &user.email,
-                verify_email_string(format!("{}/verify?code={}", state.base_url, code)),
-            )
-            .await
-            .is_err()
-    {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "InternalError",
-            "Failed to send verify email.",
-        );
+    if let Some(mailer) = &state.config.email {
+        let link = format!("{}/verify?code={}", state.base_url, code);
+        let (subject, body) = state.email_template.render(&VerifyEmail {
+            link: &link,
+            email: &user.email,
+            character_name: &user.character_name,
+            server_name: state.config.server_name.as_deref().unwrap_or("Syncraft"),
+        });
+        if let Err(err) = mailer.send_email(&user.email, &subject, body).await {
+            crate::log_warn!("Failed to send verification email to {}: {err}", user.email);
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "Failed to send verify email.",
+            );
+        }
     }
 
     (

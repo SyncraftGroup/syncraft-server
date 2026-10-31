@@ -37,7 +37,7 @@ pub fn init() {
 /// Optional log file for colour-preserving output alongside stderr.
 ///
 /// Under systemd, stderr is captured by journald which strips ANSI codes.
-/// Writing to a file preserves raw coloured output so `syncraft serve logs`
+/// Writing to a file preserves raw coloured output so `syncraft daemon logs`
 /// can tail it.
 static LOG_FILE: OnceLock<Mutex<fs::File>> = OnceLock::new();
 

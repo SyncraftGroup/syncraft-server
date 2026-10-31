@@ -34,6 +34,7 @@ pub enum MessageKey<'a> {
     ContinueToInitializeConfirm,
     InitializationCancelled,
     InitializationFinished,
+    InitRegisterHint,
     CleanUpWorkSpaceConfirm,
 
     // Git
@@ -56,7 +57,7 @@ pub enum MessageKey<'a> {
     DaemonStatus {
         pid: u32,
         uptime_secs: u64,
-        address: String,
+        servers: usize,
         manager: &'a str,
     },
     DaemonIpcError {
@@ -67,6 +68,40 @@ pub enum MessageKey<'a> {
         pid_file: String,
     },
     DaemonNotRunningPublish,
+    ServerNotRegistered,
+    ServerAdded {
+        name: String,
+        path: String,
+    },
+    ServerRemoved {
+        name: String,
+    },
+    ServerNotFound {
+        key: String,
+    },
+    ServerListEmpty,
+    ServerNotInitialized {
+        path: String,
+    },
+    ServerNameEmpty,
+    ServerAlreadyRegistered {
+        path: String,
+        name: String,
+    },
+    ServerNameTaken {
+        name: String,
+        path: String,
+    },
+    ServerInvalidPath {
+        path: String,
+        reason: String,
+    },
+    ServerRegistryError {
+        reason: String,
+    },
+    ServerColumnName,
+    ServerColumnPath,
+    ServerColumnAddress,
     DaemonNotInstalled,
     DaemonInstallUnsupported,
 
@@ -198,6 +233,10 @@ pub fn translate(key: &MessageKey) -> String {
             En: "Workspace initialized successfully.",
             Zh: "工作区初始化完成。"
         },
+        MessageKey::InitRegisterHint => msgs! {
+            En: "Next: register this server with the daemon using `syncraft server add .`.\nThe daemon is shared by every registered server.",
+            Zh: "下一步：使用 `syncraft server add .` 将此服务器注册到守护进程。\n守护进程由所有已注册的服务器共用。"
+        },
         MessageKey::CleanUpWorkSpaceConfirm => msgs! {
             En: "This will DELETE the entire syncraft workspace. Confirm? (y/n)",
             Zh: "这会删除整个 syncraft 工作区，确定吗？(y/n)"
@@ -304,13 +343,13 @@ pub fn translate(key: &MessageKey) -> String {
         MessageKey::DaemonStatus {
             pid,
             uptime_secs,
-            address,
+            servers,
             manager,
         } => {
             let label_status = msgs! { En: "Status",  Zh: "状态"  };
             let label_pid = msgs! { En: "PID",     Zh: "进程"  };
             let label_uptime = msgs! { En: "Uptime",  Zh: "运行"  };
-            let label_addr = msgs! { En: "Address", Zh: "地址"  };
+            let label_servers = msgs! { En: "Servers", Zh: "服务器" };
             let label_mgr = msgs! { En: "Manager", Zh: "管理" };
 
             let running = msgs! { En: "Running", Zh: "运行中" };
@@ -320,7 +359,7 @@ pub fn translate(key: &MessageKey) -> String {
                 format!("{}: {}", label_status.italic(), running.bold()),
                 format!("{}: {}", label_pid.italic(), pid.bold()),
                 format!("{}: {}", label_uptime.italic(), uptime.bold()),
-                format!("{}: {}", label_addr.italic(), address.bold()),
+                format!("{}: {}", label_servers.italic(), servers.bold()),
                 format!("{}: {}", label_mgr.italic(), manager.bold()),
             ]
             .join("\n")
@@ -335,23 +374,70 @@ pub fn translate(key: &MessageKey) -> String {
             )
         }
         MessageKey::DaemonNotRunningPublish => msgs! {
-            En: "Syncraft daemon is not running.\nStart it first with 'syncraft serve start', then try again.",
-            Zh: "Syncraft 守护进程未运行。\n请先执行 'syncraft serve start' 启动守护进程，然后重试。"
+            En: "Syncraft daemon is not running.\nStart it first with 'syncraft daemon start', then try again.",
+            Zh: "Syncraft 守护进程未运行。\n请先执行 'syncraft daemon start' 启动守护进程，然后重试。"
         },
+        MessageKey::ServerNotRegistered => msgs! {
+            En: "This server is not registered with the daemon.\nRun 'syncraft server add .' first.",
+            Zh: "此服务器尚未注册到守护进程。\n请先执行 'syncraft server add .'。"
+        },
+        MessageKey::ServerAdded { name, path } => msgs! {
+            En: format!("Registered '{}' ({}).", name, path),
+            Zh: format!("已注册 '{}'（{}）。", name, path)
+        },
+        MessageKey::ServerRemoved { name } => msgs! {
+            En: format!("Removed '{}'.", name),
+            Zh: format!("已移除 '{}'。", name)
+        },
+        MessageKey::ServerNotFound { key } => msgs! {
+            En: format!("Server '{}' is not registered.", key),
+            Zh: format!("服务器 '{}' 未注册。", key)
+        },
+        MessageKey::ServerListEmpty => msgs! {
+            En: "No servers registered. Use `syncraft server add <path>`.",
+            Zh: "尚无已注册的服务器。使用 `syncraft server add <path>` 添加。"
+        },
+        MessageKey::ServerNotInitialized { path } => msgs! {
+            En: format!("`{path}` is not a syncraft server. Run `syncraft init` there first."),
+            Zh: format!("`{path}` 不是 syncraft 服务器目录。请先在其中执行 `syncraft init`。")
+        },
+        MessageKey::ServerNameEmpty => msgs! {
+            En: "Server name must not be empty.",
+            Zh: "服务器名称不能为空。"
+        },
+        MessageKey::ServerAlreadyRegistered { path, name } => msgs! {
+            En: format!("`{path}` is already registered as '{name}'."),
+            Zh: format!("`{path}` 已注册为 '{name}'。")
+        },
+        MessageKey::ServerNameTaken { name, path } => msgs! {
+            En: format!("Server name '{name}' is already used by `{path}`."),
+            Zh: format!("服务器名称 '{name}' 已被 `{path}` 使用。")
+        },
+        MessageKey::ServerInvalidPath { path, reason } => msgs! {
+            En: format!("Cannot use `{path}`: {reason}"),
+            Zh: format!("无法使用 `{path}`：{reason}")
+        },
+        MessageKey::ServerRegistryError { reason } => msgs! {
+            En: format!("Failed to update the server registry: {reason}"),
+            Zh: format!("更新服务器注册表失败：{reason}")
+        },
+        MessageKey::ServerColumnName => msgs! { En: "NAME", Zh: "名称" },
+        MessageKey::ServerColumnPath => msgs! { En: "PATH", Zh: "路径" },
+        MessageKey::ServerColumnAddress => msgs! { En: "ADDRESS", Zh: "地址" },
         MessageKey::DaemonNotInstalled => {
             let reason = msgs! {
                 En: "Syncraft daemon is not installed.",
                 Zh: "Syncraft 守护进程尚未安装。"
             };
             let hint = msgs! {
-                En: "Run 'syncraft serve install' first to set up the daemon as a systemd service.",
-                Zh: "请先执行 'syncraft serve install' 将守护进程安装为 systemd 服务。"
+                En: "Run 'syncraft daemon install' first to set up the daemon as a systemd service.",
+                Zh: "请先执行 'syncraft daemon install' 将守护进程安装为 systemd 服务。"
             };
             format_reason_hint(&reason, &hint)
         }
         MessageKey::DaemonInstallUnsupported => msgs! {
-            En: "Service installation requires systemd (Linux).\nUse 'serve start' for fallback daemon mode or 'serve run' for foreground.",
-            Zh: "服务安装需要 systemd (Linux)。\n使用 'serve start' 以 fallback 模式运行，或 'serve run' 以前台模式运行。"
+            En: "Service installation requires systemd (Linux).\nUse 'daemon start' for fallback daemon mode or 'daemon foreground' for foreground.",
+            Zh: "服务安装需要 systemd (Linux)。\n使用 'daemon start' 以 fallback 模式运行，或 'daemon foreground' 以前台模式运行。"
         },
 
         // Account

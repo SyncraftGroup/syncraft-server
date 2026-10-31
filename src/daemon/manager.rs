@@ -1,8 +1,11 @@
 //! Service manager abstraction — picks systemd or a fallback double-fork
 //! daemon at runtime via [`detect`].
 
+use crate::daemon::ipc::ServerStatus;
 use crate::error::Error;
-use crate::paths::SyncraftPaths;
+use crate::message::{MessageKey, translate};
+use crate::paths::GlobalPaths;
+use console_info::Ui;
 use std::process::Command;
 
 /// Platform-specific service lifecycle management.
@@ -15,25 +18,25 @@ pub trait ServiceManager: Send + Sync {
     fn is_available(&self) -> bool;
 
     /// Install the service so the platform can manage it.
-    fn install(&self, paths: &SyncraftPaths) -> Result<(), Error>;
+    fn install(&self, global: &GlobalPaths) -> Result<(), Error>;
 
     /// Uninstall the service.
-    fn uninstall(&self, paths: &SyncraftPaths) -> Result<(), Error>;
+    fn uninstall(&self, global: &GlobalPaths) -> Result<(), Error>;
 
     /// Start the daemon through the platform's service manager.
     ///
     /// **Important:** the fallback implementation never returns when
     /// successful — it replaces the current process with the daemon.
-    fn start(&self, paths: &SyncraftPaths) -> Result<(), Error>;
+    fn start(&self, global: &GlobalPaths) -> Result<(), Error>;
 
     /// Stop a running daemon.
-    fn stop(&self, paths: &SyncraftPaths) -> Result<(), Error>;
+    fn stop(&self, global: &GlobalPaths) -> Result<(), Error>;
 
     /// Print daemon status to stdout.
-    fn status(&self, paths: &SyncraftPaths) -> Result<(), Error>;
+    fn status(&self, global: &GlobalPaths) -> Result<(), Error>;
 
     /// Tail the daemon's logs in real time.
-    fn logs(&self, paths: &SyncraftPaths) -> Result<(), Error>;
+    fn logs(&self, global: &GlobalPaths) -> Result<(), Error>;
 }
 
 mod fallback;
@@ -46,6 +49,22 @@ pub fn detect() -> Box<dyn ServiceManager> {
         return Box::new(systemd);
     }
     Box::new(fallback::Fallback)
+}
+
+/// Print daemon status plus the tenants it is currently serving.
+pub(crate) fn print_status(pid: u32, uptime_secs: u64, servers: &[ServerStatus], manager: &str) {
+    Ui::get().info(&translate(&MessageKey::DaemonStatus {
+        pid,
+        uptime_secs,
+        servers: servers.len(),
+        manager,
+    }));
+    for server in servers {
+        Ui::get().echo(&format!(
+            "  {}\t{}\t{}",
+            server.name, server.address, server.path
+        ));
+    }
 }
 
 /// Run an external command, capturing stdout and stderr.

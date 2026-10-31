@@ -92,6 +92,7 @@ pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
     git::run(paths, Some(git::GitAction::Init))?;
 
     ui.ok(&translate(&MessageKey::InitializationFinished));
+    ui.info(&translate(&MessageKey::InitRegisterHint));
     log_debug!("Init completed successfully");
     Ok(())
 }

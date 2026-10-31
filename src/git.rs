@@ -13,7 +13,12 @@ use crate::daemon::ipc::{IpcRequest, IpcResponse, is_daemon_alive, send_request}
 use crate::daemon::sync::{
     ModFileType, hash_file_blocking, load_mod_cache, mod_jars, save_mod_cache,
 };
-use crate::{config::Config, error::Error, log_debug, paths::SyncraftPaths};
+use crate::{
+    config::Config,
+    error::Error,
+    log_debug,
+    paths::{GlobalPaths, SyncraftPaths},
+};
 use crate::{log_error, log_warn};
 
 use crate::message::{MessageKey, translate};
@@ -49,9 +54,15 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             Ui::get().echo(&translate(&MessageKey::Changes(changes)));
         }
         GitAction::Publish => {
+            let global = GlobalPaths::discover();
+            let registry = crate::daemon::registry::Registry::load(&global)?;
+            if registry.find(&paths.root().display().to_string()).is_none() {
+                Ui::get().error(&translate(&MessageKey::ServerNotRegistered));
+                return Ok(());
+            }
             // Pre-check: daemon must be alive before going through the
             // editor / confirm / commit flow.
-            if !is_daemon_alive(&paths.socket_path(), &paths.pid_file()) {
+            if !is_daemon_alive(&global.socket_path(), &global.pid_file()) {
                 Ui::get().error(&translate(&MessageKey::DaemonNotRunningPublish));
                 return Ok(());
             }
@@ -171,19 +182,25 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             mod_cache.retain(|hash, _| current_hashes.contains(hash));
             save_mod_cache(&paths, &mod_cache)?;
 
-            publish_request(oid, &paths)?;
+            publish_request(oid, &paths, &global)?;
         }
     }
     Ok(())
 }
 
-fn publish_request(oid: Oid, paths: &SyncraftPaths) -> Result<(), Error> {
+fn publish_request(oid: Oid, paths: &SyncraftPaths, global: &GlobalPaths) -> Result<(), Error> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
 
-    match rt.block_on(send_request(&paths.socket_path(), &IpcRequest::Update)) {
+    let server = paths.root().display().to_string();
+    match rt.block_on(send_request(
+        &global.socket_path(),
+        &IpcRequest::Update {
+            server: server.clone(),
+        },
+    )) {
         Ok(IpcResponse::Ok) => {
             let hash = oid.to_string();
             Ui::get().ok(&translate(&MessageKey::Published(hash)));
@@ -196,10 +213,10 @@ fn publish_request(oid: Oid, paths: &SyncraftPaths) -> Result<(), Error> {
             let reason = e.to_string();
             log_warn!("Failed to contact daemon: {}", reason);
             Ui::get().error(&translate(&MessageKey::DaemonIpcError { reason }));
-            if let Ok(pid_str) = fs::read_to_string(paths.pid_file()) {
+            if let Ok(pid_str) = fs::read_to_string(global.pid_file()) {
                 Ui::get().warn(&translate(&MessageKey::DaemonStalePid {
                     pid: pid_str.trim().to_string(),
-                    pid_file: paths.pid_file().display().to_string(),
+                    pid_file: global.pid_file().display().to_string(),
                 }));
             }
         }

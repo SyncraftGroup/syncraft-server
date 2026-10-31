@@ -1,15 +1,18 @@
 pub(crate) mod http;
 pub(crate) mod ipc;
 mod manager;
+pub mod registry;
 pub(crate) mod signing;
 pub(crate) mod store;
 pub mod sync;
 
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::daemon::registry::{Registry, ServerEntry};
 use crate::daemon::store::ManifestStore;
 use crate::daemon::sync::{HashCache, HashSourceMap, file_mapping};
 use crate::git::GitRepository;
@@ -20,22 +23,21 @@ use crate::log_warn;
 use crate::config::Config;
 use crate::error::Error;
 use crate::message::{MessageKey, translate};
-use crate::paths::SyncraftPaths;
+use crate::paths::{GlobalPaths, SyncraftPaths};
 use console_info::Ui;
 use syncraft_protocol::{MANIFEST_SCHEMA, Manifest};
 use tokio::sync::{Mutex, Notify, RwLock};
-use tokio::try_join;
 
-/// Actions that the `serve` command can take.
-pub enum ServeAction {
+/// Actions that the `daemon` command can take.
+pub enum DaemonAction {
     Start,
     Stop,
     Status,
-    /// Run the server in the foreground (dev / debug / systemd ExecStart).
-    Run,
+    /// Run the daemon in the foreground (systemd ExecStart / debugging).
+    Foreground,
     Install,
     Uninstall,
-    /// Tail daemon logs (systemd journal or log file).
+    /// Tail daemon logs.
     Logs,
 }
 
@@ -78,63 +80,317 @@ impl Shutdown {
 }
 
 /// Route to the appropriate handler using the best available service manager.
-///
-/// `action` is `None` when no subcommand is given; defaults to `Start`.
-pub fn handle_command(paths: &SyncraftPaths, action: Option<&ServeAction>) -> Result<(), Error> {
-    let action = action.unwrap_or(&ServeAction::Start);
+pub fn handle_command(global: &GlobalPaths, action: &DaemonAction) -> Result<(), Error> {
+    // `stop` / `status` talk to the daemon over IPC first, so a foreground or
+    // fallback daemon is found even on machines where systemd is available.
+    if matches!(action, DaemonAction::Stop) && ipc_stop(global)? {
+        return Ok(());
+    }
+    if matches!(action, DaemonAction::Status) && ipc_status(global)? {
+        return Ok(());
+    }
+    if matches!(action, DaemonAction::Start)
+        && ipc::is_daemon_alive(&global.socket_path(), &global.pid_file())
+    {
+        Ui::get().warn(&translate(&MessageKey::DaemonAlreadyRunning));
+        return Ok(());
+    }
 
     match action {
-        ServeAction::Run => {
+        DaemonAction::Foreground => {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
-            rt.block_on(cmd_run(paths))
+            rt.block_on(run_foreground(global))
         }
 
         _ => {
             let mgr = manager::detect();
             match action {
-                ServeAction::Start => mgr.start(paths),
-                ServeAction::Stop => mgr.stop(paths),
-                ServeAction::Status => mgr.status(paths),
-                ServeAction::Install => mgr.install(paths),
-                ServeAction::Uninstall => mgr.uninstall(paths),
-                ServeAction::Logs => mgr.logs(paths),
-                ServeAction::Run => unreachable!(),
+                DaemonAction::Start => mgr.start(global),
+                DaemonAction::Stop => mgr.stop(global),
+                DaemonAction::Status => mgr.status(global),
+                DaemonAction::Install => mgr.install(global),
+                DaemonAction::Uninstall => mgr.uninstall(global),
+                DaemonAction::Logs => mgr.logs(global),
+                DaemonAction::Foreground => unreachable!(),
             }
         }
     }
 }
 
-/// Run the server in the foreground — no daemonization.
-///
-/// Used by `syncraft serve run` and systemd `ExecStart=`.
-async fn cmd_run(paths: &SyncraftPaths) -> Result<(), Error> {
-    let config = if let Some(config) = Config::load(paths) {
-        config
-    } else {
-        Ui::get().error(&translate(&MessageKey::Uninitialized));
-        return Ok(());
-    };
+/// Try to stop a running daemon via IPC. `Ok(true)` means it was handled.
+fn ipc_stop(global: &GlobalPaths) -> Result<bool, Error> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
 
-    // Warn when the config does not describe the loader that is installed.
-    crate::init::check_server_version(&config, paths);
-
-    // Rotate the old log file so `serve logs` always tails the latest session.
-    let log_file_path = paths.log_file_latest();
-    if log_file_path.exists() {
-        let _ = fs::rename(log_file_path, paths.log_file());
+    match rt.block_on(ipc::send_request(
+        &global.socket_path(),
+        &ipc::IpcRequest::Stop,
+    )) {
+        Ok(ipc::IpcResponse::Ok) => {
+            Ui::get().ok(&translate(&MessageKey::DaemonStopped));
+            Ok(true)
+        }
+        Ok(ipc::IpcResponse::Error { message }) => {
+            Ui::get().error(&translate(&MessageKey::Failed { reason: message }));
+            Ok(true)
+        }
+        _ => Ok(false),
     }
-    crate::log::init_file(&paths.log_file_latest());
+}
 
-    // Write PID so fallback `stop`/`status` can find the process.
+/// Try to query a running daemon via IPC. `Ok(true)` means it was handled.
+fn ipc_status(global: &GlobalPaths) -> Result<bool, Error> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+
+    match rt.block_on(ipc::send_request(
+        &global.socket_path(),
+        &ipc::IpcRequest::Status,
+    )) {
+        Ok(ipc::IpcResponse::Status {
+            pid,
+            uptime_secs,
+            servers,
+        }) => {
+            let manager = manager::detect();
+            manager::print_status(pid, uptime_secs, &servers, manager.name());
+            Ok(true)
+        }
+        Ok(ipc::IpcResponse::Error { message }) => {
+            log_error!("Daemon reports error: {message}");
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Run the daemon in the foreground — no daemonization.
+///
+/// Used by `syncraft daemon foreground` and systemd `ExecStart=`.
+async fn run_foreground(global: &GlobalPaths) -> Result<(), Error> {
+    prepare_logs(global)?;
+    run_daemon(global).await
+}
+
+/// Create directories and rotate the previous `latest.log` before opening a
+/// fresh one. Must happen before stdio is redirected in fallback mode.
+pub(crate) fn prepare_logs(global: &GlobalPaths) -> Result<(), Error> {
+    global.create_dirs()?;
+    let latest = global.log_file_latest();
+    if latest.exists() {
+        let _ = fs::rename(&latest, global.log_file());
+    }
+    Ok(())
+}
+
+/// Start the daemon proper. Assumes [`prepare_logs`] already ran.
+pub(crate) async fn run_daemon(global: &GlobalPaths) -> Result<(), Error> {
+    global.create_dirs()?;
+    crate::log::init_file(&global.log_file_latest());
+
     let pid = std::process::id();
-    let _ = fs::write(paths.pid_file(), pid.to_string());
-    log_info!("Server starting in foreground (PID {})", pid);
+    let _ = fs::write(global.pid_file(), pid.to_string());
+    log_info!("Daemon starting (PID {pid})");
 
-    let server = Arc::new(SyncraftServer::new(paths, config).await?);
-    server.run().await
+    let daemon = Arc::new(Daemon::new(global.clone()).await?);
+    daemon.run().await?;
+
+    log_info!("Daemon shutdown complete");
+    let _ = fs::remove_file(global.socket_path());
+    let _ = fs::remove_file(global.pid_file());
+    Ok(())
+}
+
+/// One daemon process managing every registered Minecraft server.
+pub(crate) struct Daemon {
+    pub(crate) global: GlobalPaths,
+    pub(crate) shutdown: Arc<Shutdown>,
+    pub(crate) instances: Mutex<HashMap<String, Instance>>,
+}
+
+pub(crate) struct Instance {
+    pub(crate) entry: ServerEntry,
+    pub(crate) server: Arc<SyncraftServer>,
+    pub(crate) address: String,
+}
+
+impl Daemon {
+    async fn new(global: GlobalPaths) -> Result<Self, Error> {
+        global.create_dirs()?;
+        Ok(Self {
+            global,
+            shutdown: Arc::new(Shutdown::new()),
+            instances: Mutex::new(HashMap::new()),
+        })
+    }
+
+    async fn run(self: Arc<Self>) -> Result<(), Error> {
+        let registry = Registry::load(&self.global)?;
+        self.apply_registry(&registry, false).await;
+
+        let count = self.instances.lock().await.len();
+        if count == 0 {
+            log_warn!(
+                "No servers registered. Add one with `syncraft server add /path/to/minecraft-server`."
+            );
+        } else {
+            log_info!("{count} server(s) registered");
+        }
+
+        let mut ipc = tokio::spawn(Arc::clone(&self).run_ipc());
+        tokio::select! {
+            _ = self.shutdown.wait() => {
+                log_info!("Shutdown requested");
+            }
+            result = &mut ipc => {
+                match result {
+                    Ok(Ok(())) => log_warn!("IPC server exited"),
+                    Ok(Err(e)) => log_error!("IPC server failed: {e}"),
+                    Err(e) => log_error!("IPC task failed: {e}"),
+                }
+            }
+        }
+
+        // Stop every tenant. Each instance has its own shutdown token so it can
+        // also be unregistered individually by a reload.
+        let servers: Vec<Arc<SyncraftServer>> = self
+            .instances
+            .lock()
+            .await
+            .values()
+            .map(|instance| Arc::clone(&instance.server))
+            .collect();
+        for server in servers {
+            server.shutdown.trigger();
+        }
+
+        if !ipc.is_finished() {
+            let _ = tokio::time::timeout(Duration::from_secs(3), ipc).await;
+        }
+        Ok(())
+    }
+
+    /// Start instances that are new and (when `remove_missing`) stop instances
+    /// whose registry entry disappeared.
+    async fn apply_registry(&self, registry: &Registry, remove_missing: bool) {
+        for entry in &registry.servers {
+            if self.instances.lock().await.contains_key(&entry.name) {
+                continue;
+            }
+            self.spawn_instance(entry.clone()).await;
+        }
+
+        if remove_missing {
+            let registered: Vec<&str> = registry
+                .servers
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect();
+            let stale: Vec<String> = self
+                .instances
+                .lock()
+                .await
+                .keys()
+                .filter(|name| !registered.contains(&name.as_str()))
+                .cloned()
+                .collect();
+
+            for name in stale {
+                if let Some(instance) = self.instances.lock().await.remove(&name) {
+                    instance.server.shutdown.trigger();
+                    log_info!("[{name}] unregistered");
+                }
+            }
+        }
+    }
+
+    async fn spawn_instance(&self, entry: ServerEntry) {
+        let paths = SyncraftPaths::new(entry.path.clone());
+        let config = match Config::load(&paths) {
+            Some(config) => config,
+            None => {
+                log_error!(
+                    "[{}] cannot load {}",
+                    entry.name,
+                    paths.config_path().display()
+                );
+                return;
+            }
+        };
+
+        let address = format!("{}:{}", config.network.host.trim(), config.network.port);
+        crate::init::check_server_version(&config, &paths);
+        match SyncraftServer::new(&paths, config).await {
+            Ok(server) => {
+                let server = Arc::new(server);
+                server.spawn_config_watcher();
+
+                let task = Arc::clone(&server);
+                let name = entry.name.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = task.run_http().await {
+                        log_error!("[{name}] HTTP server stopped: {e}");
+                    }
+                });
+
+                log_info!("[{}] serving on {address}", entry.name);
+                self.instances.lock().await.insert(
+                    entry.name.clone(),
+                    Instance {
+                        entry,
+                        server,
+                        address,
+                    },
+                );
+            }
+            Err(e) => log_error!("[{}] failed to start: {e}", entry.name),
+        }
+    }
+
+    /// Re-read the registry and apply additions/removals.
+    pub(crate) async fn reload(&self) -> Result<(), Error> {
+        let registry = Registry::load(&self.global)?;
+        self.apply_registry(&registry, true).await;
+        Ok(())
+    }
+
+    /// Rebuild one tenant's manifest (called after `git publish`).
+    pub(crate) async fn update_server(&self, key: &str) -> Result<(), Error> {
+        let server = {
+            let instances = self.instances.lock().await;
+            instances
+                .values()
+                .find(|instance| instance.entry.matches(key))
+                .map(|instance| Arc::clone(&instance.server))
+        };
+        let Some(server) = server else {
+            return Err(Error::Daemon(format!("unknown server: {key}")));
+        };
+        server.update().await
+    }
+
+    pub(crate) async fn status_entries(&self) -> Vec<ipc::ServerStatus> {
+        let mut entries: Vec<ipc::ServerStatus> = self
+            .instances
+            .lock()
+            .await
+            .values()
+            .map(|instance| ipc::ServerStatus {
+                name: instance.entry.name.clone(),
+                path: instance.entry.path.display().to_string(),
+                address: instance.address.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
+    }
 }
 
 pub struct SyncraftServer {
@@ -205,17 +461,22 @@ impl SyncraftServer {
 
         let built = build_manifest(&config, &paths, &repository, &hash_cache, &store).await?;
         log_info!(
-            "Manifest ready: {} files, version {}",
+            "[{}] Manifest ready: {} files, version {}",
+            config.info.id,
             built.manifest.files.len(),
             built.manifest.version_hash
         );
         if let Some(signature) = &built.manifest.signature {
             log_info!(
-                "Manifest signing enabled (ed25519 key fingerprint {})",
+                "[{}] Manifest signing enabled (ed25519 key fingerprint {})",
+                config.info.id,
                 signing::fingerprint(&signature.key)
             );
         } else if config.network.sign_manifest {
-            log_warn!("Manifest signing requested but no signature was produced");
+            log_warn!(
+                "[{}] Manifest signing requested but no signature was produced",
+                config.info.id
+            );
         }
 
         Ok(Self {
@@ -247,39 +508,20 @@ impl SyncraftServer {
         Ok(())
     }
 
-    pub(crate) async fn run(self: Arc<Self>) -> Result<(), Error> {
-        self.shutdown_handlers();
-        self.spawn_config_watcher();
-
-        try_join!(Arc::clone(&self).run_http(), Arc::clone(&self).run_ipc())?;
-
-        log_info!("Server shutdown complete");
-
-        let _ = fs::remove_file(self.paths.socket_path());
-        let _ = fs::remove_file(self.paths.pid_file());
-
+    /// Rebuild the manifest from the current on-disk state.
+    ///
+    /// `git publish` commits before calling this, so deriving the changed files
+    /// from `git status()` would always yield an empty list.
+    pub(crate) async fn update(self: Arc<Self>) -> Result<(), Error> {
+        self.rebuild_manifest().await?;
+        let manifest = self.manifest.read().await.clone();
+        log_info!(
+            "[{}] Manifest updated ({} files, version {})",
+            self.config.read().await.info.id,
+            manifest.files.len(),
+            manifest.version_hash
+        );
         Ok(())
-    }
-
-    fn shutdown_handlers(&self) {
-        let signal_shutdown = self.shutdown.clone();
-        tokio::spawn(async move {
-            tokio::signal::ctrl_c().await.ok();
-            log_info!("SIGINT received, shutting down");
-            signal_shutdown.trigger();
-        });
-
-        let term_shutdown = self.shutdown.clone();
-        tokio::spawn(async move {
-            let mut stream =
-                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                    Ok(s) => s,
-                    Err(_) => return,
-                };
-            stream.recv().await;
-            log_info!("SIGTERM received, shutting down");
-            term_shutdown.trigger();
-        });
     }
 
     async fn reload_config(self: &Arc<Self>) -> Result<(), Error> {
@@ -308,10 +550,13 @@ impl SyncraftServer {
             || old_config.network.sign_manifest != new_config.network.sign_manifest
             || old_config.yggdrasil != new_config.yggdrasil
         {
-            log_warn!("network/yggdrasil settings changed; restart the daemon to apply them");
+            log_warn!(
+                "[{}] network/yggdrasil settings changed; restart the daemon to apply them",
+                new_config.info.id
+            );
         }
 
-        log_info!("Config reloaded successfully");
+        log_info!("[{}] Config reloaded successfully", new_config.info.id);
         Ok(())
     }
 

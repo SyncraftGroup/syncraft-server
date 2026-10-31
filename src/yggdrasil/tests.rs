@@ -8,7 +8,7 @@
 #[cfg(test)]
 mod unit {
     use crate::yggdrasil::db::unsigned_uuid;
-    use crate::yggdrasil::email::verify_email_string;
+    use crate::yggdrasil::email::{EmailTemplate, VerifyEmail};
     use crate::yggdrasil::models::{TokenStatus, YggdrasilSkinType};
     use chrono::{Duration, Utc};
 
@@ -95,13 +95,20 @@ mod unit {
         assert_ne!(a, b);
     }
 
-    // -- verify_email_string -------------------------------------------------
+    // -- email template --------------------------------------------------------
 
     #[test]
-    fn verify_email_string_contains_link() {
-        let html = verify_email_string("http://example.com/verify?code=abc123".into());
+    fn verify_template_contains_link() {
+        let template = EmailTemplate::builtin();
+        let (subject, html) = template.render(&VerifyEmail {
+            link: "http://example.com/verify?code=abc123",
+            email: "a@b.com",
+            character_name: "Steve",
+            server_name: "My Server",
+        });
+        assert_eq!(subject, "Verify your Syncraft account");
         assert!(html.contains("http://example.com/verify?code=abc123"));
-        assert!(html.contains("Syncraft Verify"));
+        assert!(html.contains("Steve"));
     }
 
     // -- sign ----------------------------------------------------------------
@@ -424,6 +431,7 @@ mod integration {
             join_requests: Arc::new(Mutex::new(HashMap::new())),
             sign_key: SigningKey::<Sha1>::new(private_key),
             public_pem,
+            email_template: crate::yggdrasil::email::EmailTemplate::builtin(),
         };
 
         router(state)

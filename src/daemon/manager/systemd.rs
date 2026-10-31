@@ -1,18 +1,18 @@
 //! systemd user-unit service manager.
 //!
-//! Installs a user-scoped unit at `~/.config/systemd/user/syncraft.service`.
-//! No root privileges are required — everything runs in the user session.
+//! Installs a single user-scoped unit at `~/.config/systemd/user/syncraft.service`.
+//! One unit now runs the multi-tenant daemon, so every registered Minecraft
+//! server is managed by the same process.
 
 use std::fs;
 use std::path::PathBuf;
 
 use console_info::Ui;
 
-use crate::config::Config;
 use crate::error::Error;
 use crate::log_info;
 use crate::message::{MessageKey, translate};
-use crate::paths::SyncraftPaths;
+use crate::paths::GlobalPaths;
 
 use super::ServiceManager;
 
@@ -33,16 +33,17 @@ impl ServiceManager for Systemd {
             .unwrap_or(false)
     }
 
-    fn install(&self, paths: &SyncraftPaths) -> Result<(), Error> {
+    fn install(&self, global: &GlobalPaths) -> Result<(), Error> {
         let ui = Ui::get();
         let unit_path = user_unit_path()?;
+        global.create_dirs()?;
 
         if let Some(parent) = unit_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| Error::Daemon(format!("Failed to create systemd user dir: {}", e)))?;
         }
 
-        let unit = render_unit(paths);
+        let unit = render_unit(global);
         fs::write(&unit_path, &unit).map_err(|e| {
             Error::Daemon(format!(
                 "Failed to write unit file {}: {}",
@@ -52,11 +53,9 @@ impl ServiceManager for Systemd {
         })?;
         log_info!("Systemd unit written to {}", unit_path.display());
 
-        super::run_cmd("systemctl", &["--user", "daemon-reload"]).map_err(|e| Error::Daemon(e))?;
-        super::run_cmd("systemctl", &["--user", "enable", SERVICE_NAME])
-            .map_err(|e| Error::Daemon(e))?;
-        super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME])
-            .map_err(|e| Error::Daemon(e))?;
+        super::run_cmd("systemctl", &["--user", "daemon-reload"]).map_err(Error::Daemon)?;
+        super::run_cmd("systemctl", &["--user", "enable", SERVICE_NAME]).map_err(Error::Daemon)?;
+        super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME]).map_err(Error::Daemon)?;
 
         let pid = query_pid().unwrap_or(0);
         log_info!("Systemd service installed and started (PID {pid})");
@@ -64,7 +63,7 @@ impl ServiceManager for Systemd {
         Ok(())
     }
 
-    fn uninstall(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
+    fn uninstall(&self, _global: &GlobalPaths) -> Result<(), Error> {
         let _ = super::run_cmd("systemctl", &["--user", "stop", SERVICE_NAME]);
         let _ = super::run_cmd("systemctl", &["--user", "disable", SERVICE_NAME]);
 
@@ -85,7 +84,7 @@ impl ServiceManager for Systemd {
         Ok(())
     }
 
-    fn start(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
+    fn start(&self, _global: &GlobalPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
         if let Err(e) = super::run_cmd("systemctl", &["--user", "start", SERVICE_NAME]).map(|o| {
@@ -108,7 +107,7 @@ impl ServiceManager for Systemd {
         Ok(())
     }
 
-    fn stop(&self, _paths: &SyncraftPaths) -> Result<(), Error> {
+    fn stop(&self, _global: &GlobalPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
         match super::run_cmd("systemctl", &["--user", "stop", SERVICE_NAME]) {
@@ -125,7 +124,7 @@ impl ServiceManager for Systemd {
         Ok(())
     }
 
-    fn status(&self, paths: &SyncraftPaths) -> Result<(), Error> {
+    fn status(&self, global: &GlobalPaths) -> Result<(), Error> {
         let ui = Ui::get();
 
         let show = match super::run_cmd(
@@ -164,29 +163,39 @@ impl ServiceManager for Systemd {
             .and_then(|l| l.trim_start_matches("MainPID=").parse().ok())
             .unwrap_or(0);
 
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
+
         let uptime_secs = super::pid_uptime_secs(pid).unwrap_or(0);
+        let status = rt.block_on(async {
+            crate::daemon::ipc::send_request(
+                &global.socket_path(),
+                &crate::daemon::ipc::IpcRequest::Status,
+            )
+            .await
+        });
 
-        let address = Config::load(paths)
-            .map(|c| format!("{}:{}", c.network.host.trim(), c.network.port))
-            .unwrap_or_else(|| "unknown".into());
-
-        ui.info(&translate(&MessageKey::DaemonStatus {
-            pid,
-            uptime_secs,
-            address,
-            manager: "systemd",
-        }));
+        match status {
+            Ok(crate::daemon::ipc::IpcResponse::Status {
+                pid,
+                uptime_secs,
+                servers,
+            }) => super::print_status(pid, uptime_secs, &servers, "systemd"),
+            _ => super::print_status(pid, uptime_secs, &[], "systemd"),
+        }
         Ok(())
     }
 
-    fn logs(&self, paths: &SyncraftPaths) -> Result<(), Error> {
+    fn logs(&self, global: &GlobalPaths) -> Result<(), Error> {
         // Tail the log file directly — preserves ANSI colours that journald strips.
-        let log_file = paths.log_file_latest();
+        let log_file = global.log_file_latest();
         if !log_file.exists() {
             return Err(Error::Daemon(format!(
                 "Log file not found: {}\n\
                  The daemon may not have produced any logs yet. \
-                 Start it with `syncraft serve start`.",
+                 Start it with `syncraft daemon start`.",
                 log_file.display()
             )));
         }
@@ -225,28 +234,29 @@ fn user_unit_path() -> Result<PathBuf, Error> {
         .join(SERVICE_NAME))
 }
 
-fn render_unit(paths: &SyncraftPaths) -> String {
+fn render_unit(global: &GlobalPaths) -> String {
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "syncraft".into());
 
-    let cwd = paths.root().display().to_string();
+    let cwd = global.root().display().to_string();
 
     format!(
-        r#"# Managed by syncraft. Edit with `syncraft serve install`.
+        r#"# Managed by syncraft. Edit with `syncraft daemon install`.
 [Unit]
-Description=Syncraft Minecraft Server
+Description=Syncraft multi-server daemon
 After=network-online.target
 Wants=network-online.target
 Documentation=https://github.com/Falswqwq/syncraft-server
 
 [Service]
 Type=simple
-ExecStart={exe} serve run
+ExecStart={exe} daemon foreground
 WorkingDirectory={cwd}
 Restart=on-failure
 RestartSec=5s
 Environment=SYNCRAFT_LOG=info
+Environment=SYNCRAFT_DATA_DIR={cwd}
 StandardOutput=journal
 StandardError=journal
 
