@@ -11,7 +11,6 @@ pub struct User {
     pub id: String,
     pub email: String,
     pub password_hash: String,
-    pub password_raw: Option<String>,
     pub email_verified: bool,
     pub character_name: String,
     pub skin_hash: Option<String>,

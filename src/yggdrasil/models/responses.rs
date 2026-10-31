@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use base64::Engine;
 use chrono::Utc;
 use serde::Serialize;
@@ -46,20 +48,31 @@ pub struct GameProfile {
     pub properties: Vec<Property>,
 }
 
+/// How long we are willing to wait for a third-party skin lookup before
+/// responding without a texture.
+const SKIN_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Look a name up on Mojang first, then LittleSkin.
+async fn lookup_external_skin(name: &str) -> Option<(YggdrasilSkinType, String)> {
+    for source in [mc_skin::SkinSource::Mojang, mc_skin::SkinSource::LittleSkin] {
+        match tokio::time::timeout(SKIN_LOOKUP_TIMEOUT, mc_skin::get_skin_url(name, source)).await {
+            Ok(Ok((skin_type, url))) => {
+                return Some((YggdrasilSkinType::from(skin_type), url));
+            }
+            _ => continue,
+        }
+    }
+    None
+}
+
 impl GameProfile {
     pub async fn generate(state: YggdrasilState, profile: Profile, is_fake: bool) -> Self {
         let (skin_url, skin_type) = if !is_fake
             && let Ok(Some((hash, skin_type))) = state.db.get_user_skin_meta(&profile.id).await
         {
             (format!("{}/textures/{}", state.base_url, hash), skin_type)
-        } else if let Ok((skin_type, url)) =
-            mc_skin::get_skin_url(&profile.name, mc_skin::SkinSource::Mojang).await
-        {
-            (url, YggdrasilSkinType::from(skin_type))
-        } else if let Ok((skin_type, url)) =
-            mc_skin::get_skin_url(&profile.name, mc_skin::SkinSource::LittleSkin).await
-        {
-            (url, YggdrasilSkinType::from(skin_type))
+        } else if let Some((skin_type, url)) = lookup_external_skin(&profile.name).await {
+            (url, skin_type)
         } else {
             return Self {
                 id: profile.id,

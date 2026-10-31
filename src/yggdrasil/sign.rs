@@ -24,9 +24,20 @@ pub async fn private_key(paths: &SyncraftPaths) -> Result<RsaPrivateKey, Error> 
     log_info!("Generating RSA keys, this may take a while...");
     let private_key = RsaPrivateKey::new(&mut OsRng, 4096)?;
     let private_pem = private_key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)?;
-    fs::write(key_file, private_pem.as_bytes()).await?;
+    fs::write(key_file.clone(), private_pem.as_bytes()).await?;
+    restrict_key_file(&key_file)?;
 
     Ok(private_key)
+}
+
+/// The private key signs every profile we hand out; keep it owner-readable only.
+fn restrict_key_file(path: &std::path::Path) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 /// Sign raw data with the given RSA-SHA-1 signing key, returning a Base64-encoded signature.

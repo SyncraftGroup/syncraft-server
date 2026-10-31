@@ -442,13 +442,14 @@ pub async fn has_joined(
     // Look up profile
     && let Some((profile, is_fake)) =
         if let Ok(Some(profile)) = state.db.get_profile_for_user(&req.user_id).await {
-            Some((profile, true))
+            // Real account: prefer the skin uploaded to this server.
+            Some((profile, false))
         } else if state.config.identity_falsification {
             // make up fake identity
             Some((Profile {
                 id: unsigned_uuid(),
                 name: query.username.clone()
-            }, false))
+            }, true))
         } else { None }
     // Check if name matches
     && profile.name == req.character_name
@@ -497,7 +498,7 @@ pub async fn upload_texture(
     let token_info =
     // Look up token
     if let Ok(Some(info)) = state.db.get_token(access_token).await
-    && !info.status.eq(&TokenStatus::Invalid)
+    && info.status.eq(&TokenStatus::Active)
     // Check user identity
     && info.user_id == id { info }
     else {
@@ -544,7 +545,7 @@ pub async fn delete_skin(
     let token_info =
     // Look up token
     if let Ok(Some(info)) = state.db.get_token(access_token).await
-    && !info.status.eq(&TokenStatus::Invalid)
+    && info.status.eq(&TokenStatus::Active)
     // Check user identity
     && info.user_id == id { info }
     else {

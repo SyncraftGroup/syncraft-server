@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,9 @@ use mod_type::SideStatus;
 use syncraft_protocol::UpdateInfo;
 
 use crate::daemon::ipc::{IpcRequest, IpcResponse, is_daemon_alive, send_request};
-use crate::daemon::sync::ModFileType;
+use crate::daemon::sync::{
+    ModFileType, hash_file_blocking, load_mod_cache, mod_jars, save_mod_cache,
+};
 use crate::{config::Config, error::Error, log_debug, paths::SyncraftPaths};
 use crate::{log_error, log_warn};
 
@@ -104,59 +106,70 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
             }
 
             let oid = repository.commit(msg_str)?;
-            publish_request(oid.clone(), &paths)?;
 
-            // Apply mod filter
-            let cache_str = std::fs::read_to_string(paths.mod_type_cache()).unwrap_or_default();
-            let mut cache: HashMap<PathBuf, ModFileType> =
-                serde_json::from_str(&cache_str).unwrap_or_default();
-            let to_calculate = cache
-                .iter()
-                .filter_map(|(path, mod_type)| match mod_type {
-                    ModFileType::Unknow => Some(path.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<PathBuf>>();
-
-            if to_calculate.is_empty() {
-                return Ok(());
+            // Apply the mod filter: analyse jars whose *content* is not in the
+            // cache yet. This has to happen before the daemon rebuilds its
+            // manifest, and only once: the manifest update is the last step.
+            let mut mod_cache = load_mod_cache(&paths);
+            let mut to_calculate = Vec::new();
+            let mut current_hashes = HashSet::new();
+            for jar in mod_jars(&config, &paths) {
+                let hash = match hash_file_blocking(&jar) {
+                    Ok(hash) => hash.to_hex().to_string(),
+                    Err(e) => {
+                        log_warn!("Could not hash {}: {e}", jar.display());
+                        continue;
+                    }
+                };
+                current_hashes.insert(hash.clone());
+                match mod_cache.get(&hash) {
+                    Some(ModFileType::Unknown) | None => to_calculate.push((jar, hash)),
+                    _ => {}
+                }
             }
-            if to_calculate.len() > 2 {
-                ui.step(&translate(&MessageKey::ModFilterMayTakeAWhile));
-            }
-            for path in to_calculate {
-                if let Ok(info) = mod_type::analyze_mod_jar(&path) {
-                    let mod_type = match &info.client {
-                        &SideStatus::Required => ModFileType::Sync,
-                        &SideStatus::Optional => ModFileType::Sync,
-                        &SideStatus::Unsupported => ModFileType::Ignore,
-                    };
-                    ui.ok(&translate(&MessageKey::GotModType(&path, &mod_type)));
-                    let _ = cache.insert(path, mod_type);
-                } else {
-                    let option_ignore = translate(&MessageKey::SelectOptionIgnore);
-                    let option_sync = translate(&MessageKey::SelectOptionSync);
 
-                    let selected = ui.select(
-                        &translate(&MessageKey::SelectModType(&path)),
-                        vec![&option_ignore, &option_sync],
-                    )?;
+            if !to_calculate.is_empty() {
+                if to_calculate.len() > 2 {
+                    ui.step(&translate(&MessageKey::ModFilterMayTakeAWhile));
+                }
+                for (jar, hash) in to_calculate {
+                    let relative = jar.strip_prefix(paths.root()).unwrap_or(&jar).to_path_buf();
 
-                    if selected == &option_ignore {
-                        let mod_type = ModFileType::Ignore;
-                        ui.ok(&translate(&MessageKey::GotModType(&path, &mod_type)));
-                        let _ = cache.insert(path, mod_type);
-                    } else if selected == &option_sync {
-                        let mod_type = ModFileType::Sync;
-                        ui.ok(&translate(&MessageKey::GotModType(&path, &mod_type)));
-                        let _ = cache.insert(path, mod_type);
+                    match mod_type::analyze_mod_jar(&jar) {
+                        Ok(info) => {
+                            let mod_type = match &info.client {
+                                &SideStatus::Required => ModFileType::Sync,
+                                &SideStatus::Optional => ModFileType::Sync,
+                                &SideStatus::Unsupported => ModFileType::Ignore,
+                            };
+                            ui.ok(&translate(&MessageKey::GotModType(&relative, &mod_type)));
+                            mod_cache.insert(hash, mod_type);
+                        }
+                        Err(e) => {
+                            log_warn!("Mod lookup failed for {}: {e}", jar.display());
+                            let option_ignore = translate(&MessageKey::SelectOptionIgnore);
+                            let option_sync = translate(&MessageKey::SelectOptionSync);
+
+                            let selected = ui.select(
+                                &translate(&MessageKey::SelectModType(&relative)),
+                                vec![&option_ignore, &option_sync],
+                            )?;
+
+                            let mod_type = if selected == &option_ignore {
+                                ModFileType::Ignore
+                            } else {
+                                ModFileType::Sync
+                            };
+                            ui.ok(&translate(&MessageKey::GotModType(&relative, &mod_type)));
+                            mod_cache.insert(hash, mod_type);
+                        }
                     }
                 }
             }
 
-            let cache_str = serde_json::to_string_pretty(&cache)?;
-            let mut f = std::fs::File::create(paths.mod_type_cache())?;
-            write!(f, "{}", cache_str)?;
+            // Drop decisions for jars that are no longer installed.
+            mod_cache.retain(|hash, _| current_hashes.contains(hash));
+            save_mod_cache(&paths, &mod_cache)?;
 
             publish_request(oid, &paths)?;
         }
@@ -292,29 +305,40 @@ impl GitRepository {
             .ok_or_else(|| Error::Git(git2::Error::from_str("Failed to get latest hash")))
     }
 
-    pub fn commits_after(&self, since: &str) -> Result<Vec<UpdateInfo>, git2::Error> {
+    /// Commits between HEAD and `since` (exclusive), newest first.
+    ///
+    /// Returns `Ok(None)` when `since` is not part of this history, so callers
+    /// can answer 404 instead of dumping every commit in the repository.
+    pub fn commits_after(&self, since: &str) -> Result<Option<Vec<UpdateInfo>>, git2::Error> {
+        const MAX_COMMITS: usize = 100;
+
+        let since = git2::Oid::from_str(since.trim())
+            .map_err(|_| git2::Error::from_str("invalid commit hash"))?;
+
         let mut walk = self.inner.revwalk()?;
         walk.push_head()?;
         walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
 
         let mut messages = Vec::new();
+        let mut found = false;
 
         for oid in walk {
             let oid = oid?;
-            let oid_str = oid.to_string();
-
-            if oid_str == since {
+            if oid == since {
+                found = true;
                 break;
             }
-
+            if messages.len() >= MAX_COMMITS {
+                break;
+            }
             let commit = self.inner.find_commit(oid)?;
             messages.push(UpdateInfo {
-                message: commit.summary()?.unwrap_or("").to_string(),
-                hash: oid_str,
+                message: commit.summary().ok().flatten().unwrap_or("").to_string(),
+                hash: oid.to_string(),
             });
         }
 
-        Ok(messages)
+        Ok(found.then_some(messages))
     }
 }
 
@@ -438,5 +462,48 @@ impl CommitMsg {
         } else {
             Ok(Some(msg))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_repo(name: &str) -> (PathBuf, GitRepository) {
+        let root = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let repo = GitRepository::init(&root).unwrap();
+        (root, repo)
+    }
+
+    #[test]
+    fn commits_after_only_walks_the_requested_range() {
+        let (root, repo) = temp_repo("syncraft_test_commits_after");
+        std::fs::write(root.join("a.txt"), b"a").unwrap();
+        let first = repo.commit("first".into()).unwrap();
+        std::fs::write(root.join("b.txt"), b"b").unwrap();
+        let second = repo.commit("second".into()).unwrap();
+
+        let updates = repo.commits_after(&first.to_string()).unwrap().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].hash, second.to_string());
+        assert_eq!(updates[0].message, "second");
+
+        // Nothing after HEAD.
+        assert_eq!(
+            repo.commits_after(&second.to_string())
+                .unwrap()
+                .unwrap()
+                .len(),
+            0
+        );
+
+        // Unknown but well-formed commit → None instead of the whole history.
+        assert!(repo.commits_after(&"0".repeat(40)).unwrap().is_none());
+        // Malformed hash → error (the HTTP layer answers 404/500).
+        assert!(repo.commits_after("not-a-hash").is_err());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

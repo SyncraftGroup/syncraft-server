@@ -36,10 +36,7 @@ async fn cmd_inject(paths: SyncraftPaths) -> Result<(), Error> {
         }
     };
 
-    let base_url = format!(
-        "http://{}:{}/yggdrasil",
-        config.network.host, config.network.port
-    );
+    let base_url = config.yggdrasil_base_url();
 
     let jar_path = paths.root().join(AUTH_LIB_JAR);
     download_if_missing(&jar_path).await?;

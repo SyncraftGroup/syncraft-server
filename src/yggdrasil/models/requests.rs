@@ -120,17 +120,27 @@ impl TryFrom<TextureUploadBuilder> for TextureUpload {
     type Error = Error;
 
     fn try_from(builder: TextureUploadBuilder) -> Result<Self, Self::Error> {
+        let data = builder
+            .image
+            .ok_or_else(|| Error::SkinUpload("missing file".into()))?;
+
+        // Reject anything that is not a PNG early: the blob is served back as
+        // `image/png` and Minecraft will refuse to load it anyway.
+        const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+        if !data.starts_with(PNG_MAGIC) {
+            return Err(Error::SkinUpload("texture is not a PNG file".into()));
+        }
+
         Ok(Self {
             skin_type: match builder.model.as_deref() {
                 None | Some("") => YggdrasilSkinType::Default,
                 Some("slim") => YggdrasilSkinType::Slim,
+                Some("default") => YggdrasilSkinType::Default,
                 Some(_) => {
                     return Err(Error::SkinUpload("invalid model".into()));
                 }
             },
-            data: builder
-                .image
-                .ok_or_else(|| Error::SkinUpload("missing file".into()))?,
+            data,
         })
     }
 }
@@ -144,7 +154,6 @@ impl TextureUpload {
 #[derive(Debug)]
 struct TextureUploadBuilder {
     model: Option<String>,
-    filename: Option<String>,
     image: Option<Vec<u8>>,
 }
 
@@ -152,7 +161,6 @@ impl TextureUploadBuilder {
     async fn from_multipart(mut mul: Multipart) -> Result<Self, Error> {
         let mut builder = Self {
             model: None,
-            filename: None,
             image: None,
         };
 
@@ -162,7 +170,6 @@ impl TextureUploadBuilder {
                     builder.model = Some(field.text().await?);
                 }
                 Some("file") => {
-                    builder.filename = field.file_name().map(str::to_owned);
                     builder.image = Some(field.bytes().await?.to_vec());
                 }
                 _ => (),

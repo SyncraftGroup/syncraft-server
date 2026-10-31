@@ -1,6 +1,4 @@
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, Utc};
 use rand_core::OsRng;
 use sha2::{Digest, Sha256};
@@ -28,23 +26,29 @@ impl DBManager {
             .filename(&db_path)
             .create_if_missing(true);
         let pool = SqlitePool::connect_with(options).await?;
+        // The database contains password hashes and session tokens.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o600));
+        }
         Self::init_db(&pool).await?;
         log_info!("Database ready");
         Ok(Self { pool })
     }
 
     pub async fn init_db(pool: &SqlitePool) -> Result<(), Error> {
-        log_debug!("Running schema migrations");
+        log_debug!("Creating database schema");
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS users (
                 id                  TEXT PRIMARY KEY,
                 email               TEXT NOT NULL,
                 password_hash       TEXT NOT NULL,
-                password_raw        TEXT,
                 email_verified      INTEGER NOT NULL DEFAULT 0,
                 verification_code   TEXT,
                 character_name      TEXT NOT NULL COLLATE NOCASE UNIQUE,
                 skin_hash           TEXT,
+                skin_type           TEXT,
                 created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             )",
         )
@@ -87,7 +91,6 @@ impl DBManager {
     ) -> Result<(User, String), Error> {
         let user_id = unsigned_uuid();
         let password_hash = hash_password(password)?;
-        let password_raw = STANDARD.encode(password.as_bytes());
         let verification_code = unsigned_uuid();
 
         // Delete any unverified existing user with the same email
@@ -105,13 +108,12 @@ impl DBManager {
         }
 
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, password_raw, email_verified, verification_code, character_name)
-             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)"
+            "INSERT INTO users (id, email, password_hash, email_verified, verification_code, character_name)
+             VALUES (?1, ?2, ?3, 0, ?4, ?5)"
         )
         .bind(&user_id)
         .bind(email)
         .bind(&password_hash)
-        .bind(&password_raw)
         .bind(&verification_code)
         .bind(character_name)
         .execute(&self.pool).await?;
@@ -120,7 +122,6 @@ impl DBManager {
             id: user_id.clone(),
             email: email.to_string(),
             password_hash,
-            password_raw: Some(password_raw),
             email_verified: false,
             character_name: character_name.into(),
             skin_hash: None,
@@ -134,7 +135,7 @@ impl DBManager {
 
     pub async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, Error> {
         let user = sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, password_raw, email_verified, character_name, skin_hash, created_at
+            "SELECT id, email, password_hash, email_verified, character_name, skin_hash, created_at
             FROM users WHERE email = ?1",
         )
         .bind(email)
@@ -145,7 +146,7 @@ impl DBManager {
 
     pub async fn find_user_by_name(&self, character_name: &str) -> Result<Option<User>, Error> {
         let user = sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, password_raw, email_verified, character_name, skin_hash, created_at
+            "SELECT id, email, password_hash, email_verified, character_name, skin_hash, created_at
             FROM users WHERE character_name = ?1",
         )
         .bind(character_name)
@@ -156,9 +157,9 @@ impl DBManager {
 
     pub async fn list_verified_users(&self) -> Result<Vec<User>, Error> {
         let users = sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, password_raw, email_verified, character_name, skin_hash, created_at
+            "SELECT id, email, password_hash, email_verified, character_name, skin_hash, created_at
             FROM users WHERE email_verified = 1
-            ORDER BY character_name ASC"
+            ORDER BY character_name ASC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -173,18 +174,17 @@ impl DBManager {
     ) -> Result<User, Error> {
         let user_id = unsigned_uuid();
         let password_hash = hash_password(password)?;
-        let password_raw = STANDARD.encode(password.as_bytes());
 
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, password_raw, email_verified, character_name)
-             VALUES (?1, ?2, ?3, ?4, 1, ?5)"
+            "INSERT INTO users (id, email, password_hash, email_verified, character_name)
+             VALUES (?1, ?2, ?3, 1, ?4)",
         )
         .bind(&user_id)
         .bind(email)
         .bind(&password_hash)
-        .bind(&password_raw)
         .bind(character_name)
-        .execute(&self.pool).await?;
+        .execute(&self.pool)
+        .await?;
 
         log_info!("User created (verified): {user_id} ({email})");
 
@@ -192,7 +192,6 @@ impl DBManager {
             id: user_id,
             email: email.to_string(),
             password_hash,
-            password_raw: Some(password_raw),
             email_verified: true,
             character_name: character_name.into(),
             skin_hash: None,
@@ -304,6 +303,9 @@ impl DBManager {
     }
 
     /// Set a user's skin (upserts the skin blob and links it to the user).
+    ///
+    /// The model type is stored on the user, not on the blob: two players may
+    /// upload the same PNG with different model types.
     pub async fn set_skin(
         &self,
         user_id: &str,
@@ -311,6 +313,7 @@ impl DBManager {
         skin_type: YggdrasilSkinType,
     ) -> Result<(), Error> {
         let skin_hash = hash_skin_data(&skin_data);
+        let skin_type = skin_type.to_string();
 
         sqlx::query(
             "INSERT OR IGNORE INTO skins (skin_hash, skin_data, skin_type, updated_at)
@@ -318,12 +321,13 @@ impl DBManager {
         )
         .bind(&skin_hash)
         .bind(&skin_data)
-        .bind(&skin_type.to_string())
+        .bind(&skin_type)
         .execute(&self.pool)
         .await?;
 
-        sqlx::query("UPDATE users SET skin_hash = ?1 WHERE id = ?2")
+        sqlx::query("UPDATE users SET skin_hash = ?1, skin_type = ?2 WHERE id = ?3")
             .bind(&skin_hash)
+            .bind(&skin_type)
             .bind(user_id)
             .execute(&self.pool)
             .await?;
@@ -366,25 +370,23 @@ impl DBManager {
         &self,
         user_id: &str,
     ) -> Result<Option<(String, YggdrasilSkinType)>, Error> {
-        let result: Option<(String, String)> = sqlx::query_as(
-            "SELECT s.skin_hash, s.skin_type
-            FROM skins s
-            INNER JOIN users u ON u.skin_hash = s.skin_hash
-            WHERE u.id = ?1",
+        let result: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT skin_hash, skin_type FROM users
+            WHERE id = ?1 AND skin_hash IS NOT NULL",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        match result {
-            Some((hash, skin_type)) => Ok(Some((hash, YggdrasilSkinType::from(skin_type)))),
-            None => Ok(None),
-        }
+        Ok(result.map(|(hash, skin_type)| {
+            let skin_type = YggdrasilSkinType::from(skin_type.unwrap_or_default());
+            (hash, skin_type)
+        }))
     }
 
     /// Unlink and remove a user's skin by user id.
     pub async fn remove_skin(&self, user_id: &str) -> Result<(), Error> {
-        sqlx::query("UPDATE users SET skin_hash = NULL WHERE id = ?1")
+        sqlx::query("UPDATE users SET skin_hash = NULL, skin_type = NULL WHERE id = ?1")
             .bind(user_id)
             .execute(&self.pool)
             .await?;

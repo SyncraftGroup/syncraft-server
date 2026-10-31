@@ -5,14 +5,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::config::Config;
 use crate::daemon::SyncraftServer;
-use crate::git::Change;
 use crate::log_debug;
 use crate::log_error;
 use crate::log_info;
 use serde::{Deserialize, Serialize};
-use syncraft_protocol::{FileState, Manifest, SyncFile, SyncMode};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -159,6 +156,12 @@ impl SyncraftServer {
                 e
             ))
         })?;
+        // The control socket accepts `stop` / `update`; keep it private.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
+        }
         log_info!("IPC server listening on {}", socket_path.display());
 
         let start_time = Instant::now();
@@ -180,7 +183,7 @@ impl SyncraftServer {
                         }
                     }
                 }
-                _ = shutdown.notified() => {
+                _ = shutdown.wait() => {
                     log_info!("IPC server shutting down");
                     break;
                 }
@@ -227,7 +230,7 @@ impl SyncraftServer {
             let response = match request {
                 IpcRequest::Ping => IpcResponse::Pong,
                 IpcRequest::Stop => {
-                    self.shutdown.notify_waiters();
+                    self.shutdown.trigger();
                     IpcResponse::Ok
                 }
                 IpcRequest::Status => {
@@ -249,91 +252,18 @@ impl SyncraftServer {
         }
     }
 
-    async fn update(self: Arc<Self>) -> Result<(), Error> {
-        let changes = { self.repository.lock().await.status()? };
-        let config = self.config.read().await;
-
-        let mut to_update = Vec::new();
-
-        for change in changes {
-            match change {
-                Change::Added(path) | Change::Modified(path) => {
-                    let state = FileState::from_path(&path).await?;
-                    let mode = infer_sync_mode(&path, &config);
-                    to_update.push((
-                        path,
-                        SyncFile {
-                            state: Some(state),
-                            mode,
-                        },
-                    ));
-                }
-                Change::Renamed { from, to } => {
-                    to_update.push((
-                        from,
-                        SyncFile {
-                            state: None,
-                            mode: SyncMode::Forbidden,
-                        },
-                    ));
-                    let state = FileState::from_path(&to).await?;
-                    let mode = infer_sync_mode(&to, &config);
-                    to_update.push((
-                        to,
-                        SyncFile {
-                            state: Some(state),
-                            mode,
-                        },
-                    ));
-                }
-                Change::Deleted(path) => {
-                    to_update.push((
-                        path,
-                        SyncFile {
-                            state: None,
-                            mode: SyncMode::Forbidden,
-                        },
-                    ));
-                }
-                _ => (),
-            }
-        }
-
-        let files = {
-            let mut file_mapping = self.file_mapping.lock().await;
-            let mut hash_mapping = self.hash_mapping.lock().await;
-
-            for (path, file) in to_update {
-                if let Some(state) = &file.state {
-                    hash_mapping.insert(state.hash.clone(), path.clone());
-                }
-                file_mapping.insert(path, file);
-            }
-            // expensive but isn't frequently called
-            file_mapping.clone()
-        };
-
-        // Rebuild the shared manifest from the updated state.
-        let manifest = {
-            let version_hash = self.repository.lock().await.latest_hash()?.to_string();
-            let version = config.info.clone();
-            Arc::new(Manifest {
-                version_hash,
-                version,
-                files,
-            })
-        };
-        *self.manifest.write().await = manifest;
-
+    /// Rebuild the manifest from the current on-disk state.
+    ///
+    /// `git publish` commits before calling this, so deriving the changed files
+    /// from `git status()` would always yield an empty list.
+    pub(crate) async fn update(self: Arc<Self>) -> Result<(), Error> {
+        self.rebuild_manifest().await?;
+        let manifest = self.manifest.read().await.clone();
+        log_info!(
+            "Manifest updated ({} files, version {})",
+            manifest.files.len(),
+            manifest.version_hash
+        );
         Ok(())
     }
-}
-
-fn infer_sync_mode(path: &Path, config: &Config) -> SyncMode {
-    for object in &config.sync {
-        if object.source.starts_with(path) {
-            return object.mode.clone();
-        }
-    }
-    SyncMode::Strict
 }

@@ -74,7 +74,6 @@ pub enum MessageKey<'a> {
     AccountListEmpty,
     AccountColName,
     AccountColEmail,
-    AccountColPassword,
     AccountColSkin,
     AccountColCreated,
     AccountTotal,
@@ -368,10 +367,6 @@ pub fn translate(key: &MessageKey) -> String {
             En: "Email",
             Zh: "邮箱"
         },
-        MessageKey::AccountColPassword => msgs! {
-            En: "Password",
-            Zh: "密码"
-        },
         MessageKey::AccountColSkin => msgs! {
             En: "Skin",
             Zh: "皮肤"
@@ -500,7 +495,7 @@ pub fn translate(key: &MessageKey) -> String {
                     En: "Sync",
                     Zh: "同步"
                 },
-                ModFileType::Unknow => "???".to_string(),
+                ModFileType::Unknown => "???".to_string(),
             };
             format!("{} : {}", path.to_string_lossy(), type_str)
         }
@@ -631,6 +626,7 @@ mod tests {
     fn version_info_contains_data() {
         let info = VersionInfo {
             name: "MyServer".into(),
+            id: "test".into(),
             vanilla_version: "1.21".into(),
             loader: Loader::Fabric {
                 loader_version: "0.16.0".into(),

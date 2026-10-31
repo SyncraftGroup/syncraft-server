@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// Yggdrasil authentication server configuration (serialisable from the main config).
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct YggdrasilConfig {
     pub server_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,12 +37,16 @@ pub struct YggdrasilConfig {
     pub identity_falsification: bool,
 }
 
+/// Placeholder written by `syncraft init`; replaced once the operator configures
+/// a real public URL. Until then the network bind address is used instead.
+pub const DEFAULT_BASE_URL: &str = "http://example.com/yggdrasil";
+
 impl Default for YggdrasilConfig {
     fn default() -> Self {
         Self {
             server_name: None,
             email: None,
-            base_url: "http://example.com/yggdrasil".into(),
+            base_url: DEFAULT_BASE_URL.into(),
             skin_domains: vec!["example.com".into(), "littleskin.cn".into()],
             identity_falsification: false,
         }

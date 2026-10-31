@@ -72,7 +72,7 @@ impl ServiceManager for Fallback {
 
         log_info!("Daemonizing (fallback / double-fork)");
 
-        daemonize(&paths.pid_file(), &paths.log_file_latest());
+        daemonize(&paths.pid_file(), &paths.log_file_latest(), &paths.root());
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -190,7 +190,7 @@ impl ServiceManager for Fallback {
 }
 
 /// Double-fork the current process into a proper daemon.
-fn daemonize(pid_file: &std::path::Path, log_file: &std::path::Path) {
+fn daemonize(pid_file: &std::path::Path, log_file: &std::path::Path, work_dir: &std::path::Path) {
     if let Some(parent) = log_file.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -221,7 +221,9 @@ fn daemonize(pid_file: &std::path::Path, log_file: &std::path::Path) {
     let pid = std::process::id();
     let _ = fs::write(pid_file, pid.to_string());
 
-    let _ = std::env::set_current_dir("/");
+    // Stay in the Minecraft server directory: configuration paths are relative
+    // to it, and `daemonize` would otherwise leave us at `/`.
+    let _ = std::env::set_current_dir(work_dir);
     unsafe {
         libc::umask(0o022);
     }

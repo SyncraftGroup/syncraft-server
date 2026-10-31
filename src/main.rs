@@ -20,7 +20,11 @@ use crate::git::GitAction;
 use crate::paths::SyncraftPaths;
 
 #[derive(Parser)]
-#[command(version, about = "Syncraft Minecraft Synchronization Server")]
+#[command(
+    name = "syncraft",
+    version,
+    about = "Syncraft Minecraft Synchronization Server"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -147,9 +151,7 @@ impl From<AccountCommand> for AccountAction {
                 character_name,
                 password,
             },
-            AccountCommand::Remove { character_name } => AccountAction::Remove {
-                character_name,
-            },
+            AccountCommand::Remove { character_name } => AccountAction::Remove { character_name },
         }
     }
 }
@@ -195,7 +197,9 @@ fn main() -> Result<(), Error> {
         Command::Publish => {
             git::run(paths, Some(GitAction::Publish))?;
         }
-        Command::Status => {}
+        Command::Status => {
+            daemon::handle_command(&paths, Some(&ServeAction::Status))?;
+        }
         Command::Account { action } => {
             let action: AccountAction = action.into();
             let rt = tokio::runtime::Builder::new_current_thread()

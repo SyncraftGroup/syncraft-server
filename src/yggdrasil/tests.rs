@@ -292,6 +292,27 @@ mod db_tests {
     }
 
     #[tokio::test]
+    async fn set_skin_updates_model_for_same_image() {
+        let db = test_db().await;
+        let (user, _) = db
+            .create_user("model@b.com", "pass", "ModelChar")
+            .await
+            .unwrap();
+        let data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 7, 7];
+
+        db.set_skin(&user.id, data.clone(), YggdrasilSkinType::Default)
+            .await
+            .unwrap();
+        // Re-uploading the same image with another model must switch the model.
+        db.set_skin(&user.id, data, YggdrasilSkinType::Slim)
+            .await
+            .unwrap();
+
+        let (_, skin_type) = db.get_user_skin_meta(&user.id).await.unwrap().unwrap();
+        assert_eq!(skin_type, YggdrasilSkinType::Slim);
+    }
+
+    #[tokio::test]
     async fn remove_skin() {
         let db = test_db().await;
         let (user, _) = db
@@ -938,6 +959,64 @@ mod integration {
     }
 
     #[tokio::test]
+    async fn has_joined_uses_uploaded_skin() {
+        use base64::Engine as _;
+
+        let mut app = test_app().await;
+        let (access_token, _, user_id) = register_and_auth(&mut app).await;
+
+        let skin_data =
+            std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test/skin.png"))
+                .unwrap();
+        let boundary = "testboundary";
+        let body = build_skin_multipart(boundary, "default", &skin_data);
+        let resp = put_multipart(
+            &mut app,
+            &format!("/api/user/profile/{user_id}/skin"),
+            boundary,
+            body,
+            &access_token,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        post_json(
+            &mut app,
+            "/sessionserver/session/minecraft/join",
+            serde_json::json!({
+                "accessToken": access_token,
+                "selectedProfile": { "id": user_id, "name": "TestChar" },
+                "serverId": "skin-server-abc"
+            }),
+        )
+        .await;
+
+        let resp = get(
+            &mut app,
+            "/sessionserver/session/minecraft/hasJoined?username=TestChar&serverId=skin-server-abc",
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let value = json["properties"][0]["value"].as_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .unwrap();
+        let decoded = String::from_utf8(decoded).unwrap();
+
+        // The player's own skin must be served by this server, not looked up
+        // on Mojang/LittleSkin (the `is_fake` flag used to be inverted).
+        assert!(
+            decoded.contains("/textures/"),
+            "expected local texture url, got: {decoded}"
+        );
+    }
+
+    #[tokio::test]
     async fn has_joined_not_found() {
         let mut app = test_app().await;
         let resp = get(
@@ -1000,7 +1079,7 @@ mod integration {
             &access_token,
         )
         .await;
-        assert!(resp.status().is_client_error() || resp.status().is_success());
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -1013,7 +1092,53 @@ mod integration {
             &access_token,
         )
         .await;
-        assert!(resp.status().is_client_error() || resp.status().is_success());
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn upload_skin_without_auth_is_rejected() {
+        let mut app = test_app().await;
+        let (_, _, user_id) = register_and_auth(&mut app).await;
+
+        let skin_data =
+            std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test/skin.png"))
+                .unwrap();
+        let boundary = "testboundary";
+        let body = build_skin_multipart(boundary, "slim", &skin_data);
+
+        let resp = app
+            .as_service()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/user/profile/{user_id}/skin"))
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!resp.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_non_png() {
+        let mut app = test_app().await;
+        let (access_token, _, user_id) = register_and_auth(&mut app).await;
+        let boundary = "testboundary";
+        let body = build_skin_multipart(boundary, "slim", b"definitely not a png");
+        let resp = put_multipart(
+            &mut app,
+            &format!("/api/user/profile/{user_id}/skin"),
+            boundary,
+            body,
+            &access_token,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     // -- Profile -------------------------------------------------------------

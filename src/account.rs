@@ -5,8 +5,6 @@ use crate::log_info;
 use crate::message::{self, MessageKey};
 use crate::paths::SyncraftPaths;
 use crate::yggdrasil::db::DBManager;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use console_info::Ui;
 use tabled::builder::Builder;
 use tabled::settings::Style;
@@ -33,7 +31,9 @@ pub async fn run(paths: SyncraftPaths, action: AccountAction) -> Result<(), Erro
     };
 
     if config.yggdrasil.base_url.is_empty() {
-        Ui::get().error(&message::translate(&MessageKey::AccountYggdrasilNotConfigured));
+        Ui::get().error(&message::translate(
+            &MessageKey::AccountYggdrasilNotConfigured,
+        ));
         return Ok(());
     }
 
@@ -65,16 +65,9 @@ async fn cmd_list(db: &DBManager) -> Result<(), Error> {
 
     for user in &users {
         let has_skin = if user.skin_hash.is_some() { "Y" } else { "N" };
-        let password = user
-            .password_raw
-            .as_deref()
-            .and_then(|raw| STANDARD.decode(raw).ok())
-            .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
-            .unwrap_or_else(|| "<n/a>".to_string());
         builder.push_record([
             user.character_name.as_str(),
             user.email.as_str(),
-            &password,
             has_skin,
             user.created_at.as_str(),
         ]);
@@ -83,7 +76,11 @@ async fn cmd_list(db: &DBManager) -> Result<(), Error> {
     let mut table = builder.build();
     table.with(Style::modern());
     Ui::get().echo(&table.to_string());
-    Ui::get().echo(&format!("\n{}: {}", message::translate(&MessageKey::AccountTotal), users.len()));
+    Ui::get().echo(&format!(
+        "\n{}: {}",
+        message::translate(&MessageKey::AccountTotal),
+        users.len()
+    ));
 
     Ok(())
 }
@@ -91,10 +88,9 @@ async fn cmd_list(db: &DBManager) -> Result<(), Error> {
 fn column_names() -> Vec<String> {
     let name = message::translate(&MessageKey::AccountColName);
     let email = message::translate(&MessageKey::AccountColEmail);
-    let password = message::translate(&MessageKey::AccountColPassword);
     let skin = message::translate(&MessageKey::AccountColSkin);
     let created = message::translate(&MessageKey::AccountColCreated);
-    vec![name, email, password, skin, created]
+    vec![name, email, skin, created]
 }
 
 async fn cmd_add(
@@ -119,7 +115,9 @@ async fn cmd_add(
         return Ok(());
     }
 
-    let user = db.create_user_verified(email, password, character_name).await?;
+    let user = db
+        .create_user_verified(email, password, character_name)
+        .await?;
     log_info!(
         "Account created: '{}' <{}> (id={})",
         user.character_name,
@@ -139,7 +137,11 @@ async fn cmd_remove(db: &DBManager, character_name: &str) -> Result<(), Error> {
 
     match removed {
         Some(user) => {
-            log_info!("Account removed: '{}' (id={})", user.character_name, user.id);
+            log_info!(
+                "Account removed: '{}' (id={})",
+                user.character_name,
+                user.id
+            );
             Ui::get().ok(&message::translate(&MessageKey::AccountRemoved {
                 character_name: user.character_name,
             }));

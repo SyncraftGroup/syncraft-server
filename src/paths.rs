@@ -27,6 +27,19 @@ impl SyncraftPaths {
         self.root.clone()
     }
 
+    /// Resolve a config-relative path against the workspace root.
+    ///
+    /// Config paths are documented as relative to the Minecraft server
+    /// directory, which is not necessarily the process working directory
+    /// (systemd units, the double-fork fallback and `syncraft serve` all differ).
+    pub fn resolve(&self, path: &std::path::Path) -> PathBuf {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root().join(path)
+        }
+    }
+
     pub fn workspace(&self) -> PathBuf {
         self.root().join("syncraft")
     }
@@ -64,7 +77,7 @@ impl SyncraftPaths {
     }
 
     pub fn log_file(&self) -> PathBuf {
-        let timestamp = Local::now().format("%Y-%m-%d-%M-%H");
+        let timestamp = Local::now().format("%Y-%m-%d-%H-%M-%S");
         self.workspace()
             .join("logs")
             .join(format!("{timestamp}.log"))
@@ -72,6 +85,14 @@ impl SyncraftPaths {
 
     pub fn mod_type_cache(&self) -> PathBuf {
         self.data().join("mod_type_cache.json")
+    }
+
+    pub fn hash_cache(&self) -> PathBuf {
+        self.data().join("hash_cache.json")
+    }
+
+    pub fn manifests_dir(&self) -> PathBuf {
+        self.data().join("manifests")
     }
 }
 

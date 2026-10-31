@@ -49,6 +49,7 @@ pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
     };
 
     let version_info = VersionInfo {
+        id: slugify(&name),
         name,
         vanilla_version,
         loader,
@@ -84,7 +85,9 @@ pub fn run(paths: SyncraftPaths, force: bool) -> Result<(), Error> {
         .enable_all()
         .build()
         .map_err(|e| Error::Daemon(format!("Failed to create runtime: {}", e)))?;
-    let _ = rt.block_on(yggdrasil::init(&paths, &config.yggdrasil));
+    // Build the router only to initialise the database and signing key here;
+    // the daemon builds its own instance when it starts listening.
+    drop(rt.block_on(yggdrasil::init(&paths, &config.yggdrasil))?);
 
     git::run(paths, Some(git::GitAction::Init))?;
 
@@ -97,6 +100,29 @@ fn write_config(paths: &SyncraftPaths, config: &Config) -> Result<(), Error> {
     let content = toml::to_string_pretty(config)?;
     std::fs::write(paths.config_path(), content)?;
     Ok(())
+}
+
+/// Stable, filesystem-safe identifier derived from the display name.
+///
+/// The client uses this for version file names, so renaming the server later
+/// does not orphan version JSONs/jars.
+fn slugify(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "syncraft".to_string()
+    } else {
+        slug
+    }
 }
 
 fn cleanup_old_workspace(paths: &SyncraftPaths) -> Result<(), Error> {
@@ -126,73 +152,97 @@ fn looks_like_mc_server_dir(cwd: &Path) -> Result<bool, Error> {
 }
 
 /// Guess the Minecraft version and mod loader from the server directory.
+///
+/// Version directories are scanned newest-first, so a leftover older loader
+/// does not shadow the one that is actually installed.
 pub fn guess_version(path: PathBuf) -> (Option<String>, Loader) {
     let lib_path = path.join("libraries");
 
-    let neoforge_path = lib_path.join("net").join("neoforged");
-    if neoforge_path.exists() {
-        let info_dir = neoforge_path.join("neoforge");
-        if info_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(info_dir) {
-                for entry in entries.flatten() {
-                    if let Some(version_str) = entry.file_name().to_str() {
-                        if let Some(parsed) = parse_neoforge(version_str) {
-                            return parsed;
-                        }
-                    }
-                }
-            }
+    let neoforge_dir = lib_path.join("net").join("neoforged").join("neoforge");
+    for version_str in version_dirs(&neoforge_dir) {
+        if let Some(parsed) = parse_neoforge(&version_str) {
+            return parsed;
         }
     }
 
-    let forge_path = lib_path.join("net").join("minecraftforge");
-    if forge_path.exists() {
-        let info_dir = forge_path.join("forge");
-        if info_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(info_dir) {
-                for entry in entries.flatten() {
-                    if let Some(version_str) = entry.file_name().to_str() {
-                        if let Some(pos) = version_str.find('-') {
-                            return (
-                                Some(version_str[..pos].to_string()),
-                                Loader::Forge {
-                                    loader_version: version_str[pos + 1..].to_string(),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
+    let forge_dir = lib_path.join("net").join("minecraftforge").join("forge");
+    for version_str in version_dirs(&forge_dir) {
+        if let Some(pos) = version_str.find('-') {
+            return (
+                Some(version_str[..pos].to_string()),
+                Loader::Forge {
+                    loader_version: version_str[pos + 1..].to_string(),
+                },
+            );
         }
     }
 
     let fabric_path = lib_path.join("net").join("fabricmc");
     if fabric_path.exists() {
-        let mut loader_version = None;
-        let mut vanilla_version = None;
+        let loader_version = version_dirs(&fabric_path.join("fabric-loader"))
+            .into_iter()
+            .next();
+        let vanilla_version = version_dirs(&fabric_path.join("intermediary"))
+            .into_iter()
+            .next();
 
-        if let Ok(entries) = std::fs::read_dir(fabric_path.join("fabric-loader")) {
-            for entry in entries.flatten() {
-                if let Some(v) = entry.file_name().to_str() {
-                    loader_version = Some(v.to_string());
-                    break;
-                }
-            }
-        }
-        if let Ok(entries) = std::fs::read_dir(fabric_path.join("intermediary")) {
-            for entry in entries.flatten() {
-                if let Some(v) = entry.file_name().to_str() {
-                    vanilla_version = Some(v.to_string());
-                    break;
-                }
-            }
-        }
         if let (Some(lv), Some(vv)) = (loader_version, vanilla_version) {
             return (Some(vv), Loader::Fabric { loader_version: lv });
         }
     }
 
     (None, Loader::Vanilla)
+}
+
+/// Directory names, newest version first (numeric-aware).
+fn version_dirs(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .collect();
+    names.sort_by(|a, b| version_cmp(b, a));
+    names
+}
+
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let key = |value: &str| -> Vec<u64> {
+        value
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|part| !part.is_empty())
+            .filter_map(|part| part.parse().ok())
+            .collect()
+    };
+    key(a).cmp(&key(b))
+}
+
+/// Warn when `syncraft.toml` disagrees with the loader actually installed.
+///
+/// The config drives what clients install; if it drifts from the server, the
+/// launcher and the server will never match.
+pub fn check_server_version(config: &Config, paths: &SyncraftPaths) {
+    let (detected_mc, detected_loader) = guess_version(paths.root());
+
+    if let Some(detected_mc) = detected_mc
+        && detected_mc != config.info.vanilla_version
+    {
+        log_warn!(
+            "Version mismatch: server runs Minecraft {detected_mc}, syncraft.toml says {}",
+            config.info.vanilla_version
+        );
+    }
+
+    if !matches!(detected_loader, Loader::Vanilla)
+        && detected_loader.tag() != config.info.loader.tag()
+    {
+        log_warn!(
+            "Version mismatch: server runs {}, syncraft.toml says {}",
+            detected_loader.tag(),
+            config.info.loader.tag()
+        );
+    }
 }
 
 /// Parse a NeoForge version directory name.

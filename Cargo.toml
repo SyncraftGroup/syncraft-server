@@ -1,9 +1,25 @@
 [package]
-name = "syncraft_server"
+name = "syncraft-server"
 version = "0.1.0"
 edition = "2024"
+description = "Syncraft Minecraft synchronization server"
+authors = ["Falsw <Falsestar114514@outlook.com>"]
+license = "MIT"
+repository = "https://github.com/SyncraftGroup/syncraft-server"
+rust-version = "1.88"
+readme = "README.md"
+# The binary is installed as `syncraft` (see the docs and systemd units), not
+# as `syncraft-server`. Disable auto-discovery so `src/main.rs` is not built
+# twice under two different names.
+autobins = false
+
+[[bin]]
+name = "syncraft"
+path = "src/main.rs"
 
 [dependencies]
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 argon2 = "0.5.3"
 axum = "0.8.9"
 clap = { version = "4.6.1", features = ["derive"] }
@@ -18,7 +34,17 @@ serde_json = "1.0.150"
 uuid = { version = "1.18.1", features = ["v4"] }
 sys-locale = "0.3.2"
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.52.3", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "signal",
+    "time",
+    "net",
+    "io-util",
+    "fs",
+] }
 toml = "1.1.2"
 rand_core = { version = "0.6", features = ["getrandom"] }
 chrono = { version = "0.4.45", features = ["serde"] }
