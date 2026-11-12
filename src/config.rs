@@ -43,6 +43,15 @@ pub struct TlsConfig {
     pub key: PathBuf,
 }
 
+/// Optional client theme package.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ThemeConfig {
+    /// A theme directory (containing `theme.json`) or a `.zip` of one.
+    /// Relative paths are resolved against the Minecraft server directory.
+    #[serde(deserialize_with = "deserialize_clean_path")]
+    pub path: PathBuf,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NetworkConfig {
     pub host: String,
@@ -97,6 +106,9 @@ pub struct Config {
     /// these do not require a matching file on the server.
     #[serde(default)]
     pub forbid: Vec<PathBuf>,
+    /// Optional client theme package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeConfig>,
     pub yggdrasil: YggdrasilConfig,
 }
 
@@ -119,6 +131,7 @@ impl Default for Config {
             server: ServerSettings::default(),
             sync: Vec::new(),
             forbid: Vec::new(),
+            theme: None,
             yggdrasil: YggdrasilConfig::default(),
         }
     }
@@ -249,6 +262,9 @@ key = "certs/privkey.pem"
 snapshot_retention = 8
 download_concurrency = 2
 
+[theme]
+path = "theme"
+
 [[sync]]
 source = "mods/"
 target = "mods/"
@@ -270,6 +286,10 @@ identity_falsification = false
         );
         assert_eq!(config.server.snapshot_retention, 8);
         assert_eq!(config.download_concurrency(), 2);
+        assert_eq!(
+            config.theme.as_ref().map(|theme| theme.path.as_path()),
+            Some(std::path::Path::new("theme"))
+        );
         assert_eq!(config.forbid.len(), 1);
         assert_eq!(config.info.id, "myserver");
         assert_eq!(

@@ -9,6 +9,7 @@ mod log;
 mod message;
 mod paths;
 mod server;
+mod theme;
 mod yggdrasil;
 
 use clap::{Parser, Subcommand};

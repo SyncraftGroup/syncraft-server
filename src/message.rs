@@ -355,7 +355,7 @@ pub fn translate(key: &MessageKey) -> String {
             let running = msgs! { En: "Running", Zh: "运行中" };
             let uptime = format_uptime(*uptime_secs);
 
-            vec![
+            [
                 format!("{}: {}", label_status.italic(), running.bold()),
                 format!("{}: {}", label_pid.italic(), pid.bold()),
                 format!("{}: {}", label_uptime.italic(), uptime.bold()),
@@ -664,7 +664,7 @@ fn format_version_info(info: &VersionInfo) -> String {
         }
     };
 
-    vec![
+    [
         format!("  {}: {}", name_label.italic(), info.name.bold()),
         format!(
             "  {}: {}",

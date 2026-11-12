@@ -148,10 +148,10 @@ pub fn run(paths: SyncraftPaths, action: Option<GitAction>) -> Result<(), Error>
 
                     match mod_type::analyze_mod_jar(&jar) {
                         Ok(info) => {
-                            let mod_type = match &info.client {
-                                &SideStatus::Required => ModFileType::Sync,
-                                &SideStatus::Optional => ModFileType::Sync,
-                                &SideStatus::Unsupported => ModFileType::Ignore,
+                            let mod_type = match info.client {
+                                SideStatus::Required => ModFileType::Sync,
+                                SideStatus::Optional => ModFileType::Sync,
+                                SideStatus::Unsupported => ModFileType::Ignore,
                             };
                             ui.ok(&translate(&MessageKey::GotModType(&relative, &mod_type)));
                             mod_cache.insert(hash, mod_type);

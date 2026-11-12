@@ -103,6 +103,7 @@ mod tests {
             },
             download_concurrency: None,
             signature: None,
+            theme: None,
             files: BTreeMap::new(),
         }
     }

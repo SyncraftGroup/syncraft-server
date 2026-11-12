@@ -214,67 +214,60 @@ impl Daemon {
         Ok(())
     }
 
-    fn handle_connection(
-        self: Arc<Self>,
-        stream: UnixStream,
-        pid: u32,
-        start_time: Instant,
-    ) -> impl std::future::Future<Output = ()> + Send
+    async fn handle_connection(self: Arc<Self>, stream: UnixStream, pid: u32, start_time: Instant)
     where
         Self: Sync,
     {
-        async move {
-            let (reader, mut writer) = stream.into_split();
-            let mut buf_reader = BufReader::new(reader);
-            let mut line = String::new();
+        let (reader, mut writer) = stream.into_split();
+        let mut buf_reader = BufReader::new(reader);
+        let mut line = String::new();
 
-            if buf_reader.read_line(&mut line).await.is_err() {
+        if buf_reader.read_line(&mut line).await.is_err() {
+            return;
+        }
+
+        let request: IpcRequest = match serde_json::from_str(&line) {
+            Ok(req) => req,
+            Err(e) => {
+                send_response(
+                    &mut writer,
+                    &IpcResponse::Error {
+                        message: format!("Invalid request: {}", e),
+                    },
+                )
+                .await;
                 return;
             }
+        };
 
-            let request: IpcRequest = match serde_json::from_str(&line) {
-                Ok(req) => req,
-                Err(e) => {
-                    send_response(
-                        &mut writer,
-                        &IpcResponse::Error {
-                            message: format!("Invalid request: {}", e),
-                        },
-                    )
-                    .await;
-                    return;
-                }
-            };
-
-            let response = match request {
-                IpcRequest::Ping => IpcResponse::Pong,
-                IpcRequest::Stop => {
-                    self.shutdown.trigger();
-                    IpcResponse::Ok
-                }
-                IpcRequest::Reload => match self.reload().await {
-                    Ok(()) => IpcResponse::Ok,
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+        let response = match request {
+            IpcRequest::Ping => IpcResponse::Pong,
+            IpcRequest::Stop => {
+                self.shutdown.trigger();
+                IpcResponse::Ok
+            }
+            IpcRequest::Reload => match self.reload().await {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => IpcResponse::Error {
+                    message: e.to_string(),
                 },
-                IpcRequest::Update { server } => match self.update_server(&server).await {
-                    Ok(()) => IpcResponse::Ok,
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+            },
+            IpcRequest::Update { server } => match self.update_server(&server).await {
+                Ok(()) => IpcResponse::Ok,
+                Err(e) => IpcResponse::Error {
+                    message: e.to_string(),
                 },
-                IpcRequest::Status => {
-                    let uptime_secs = start_time.elapsed().as_secs();
-                    IpcResponse::Status {
-                        pid,
-                        uptime_secs,
-                        servers: self.status_entries().await,
-                    }
+            },
+            IpcRequest::Status => {
+                let uptime_secs = start_time.elapsed().as_secs();
+                IpcResponse::Status {
+                    pid,
+                    uptime_secs,
+                    servers: self.status_entries().await,
                 }
-            };
+            }
+        };
 
-            send_response(&mut writer, &response).await;
-        }
+        send_response(&mut writer, &response).await;
     }
 }

@@ -58,7 +58,7 @@ pub fn init_file(path: &Path) {
 }
 
 pub(crate) fn enabled(lvl: Level) -> bool {
-    FILTER.get().map_or(true, |&max| lvl <= max)
+    FILTER.get().is_none_or(|&max| lvl <= max)
 }
 
 pub(crate) fn emit(level_char: &str, color: impl owo_colors::DynColor + Copy, msg: &str) {

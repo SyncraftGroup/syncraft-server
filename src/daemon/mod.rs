@@ -423,9 +423,18 @@ async fn build_manifest(
     };
 
     let version = config.info.clone();
+    // A broken theme must not take the whole server (or its manifest) down:
+    // report it and keep serving the game files without a theme.
+    let theme = match crate::theme::build(paths, config.theme.as_ref()) {
+        Ok(theme) => theme,
+        Err(error) => {
+            log_warn!("Ignoring client theme: {error}");
+            None
+        }
+    };
     // The version hash describes the file set, not the git commit: the same
     // commit can produce different manifests (mod filter, forbid rules).
-    let version_hash = Manifest::content_hash(MANIFEST_SCHEMA, &version, &files);
+    let version_hash = Manifest::content_hash(MANIFEST_SCHEMA, &version, &files, theme.as_ref());
     let commit = match repository.lock().await.latest_hash() {
         Ok(oid) => oid.to_string(),
         Err(e) => {
@@ -441,6 +450,7 @@ async fn build_manifest(
         version,
         download_concurrency: Some(config.download_concurrency()),
         signature: None,
+        theme,
         files,
     };
     signing::sign_if_enabled(paths, &mut manifest, config.network.sign_manifest)?;

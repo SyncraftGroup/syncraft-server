@@ -32,6 +32,7 @@ impl SyncraftServer {
             .route("/versions", get(Self::versions))
             .route("/download/{hash}", get(Self::download))
             .route("/updateInfo/{hash}", get(Self::update_info))
+            .route("/theme/{hash}", get(Self::theme))
             .with_state(self.clone())
             .nest(
                 "/yggdrasil",
@@ -225,6 +226,29 @@ impl SyncraftServer {
             }
         };
         Json(commits).into_response()
+    }
+
+    /// Hash-addressed theme package advertised by the manifest.
+    async fn theme(State(state): State<Arc<Self>>, Path(hash): Path<String>) -> Response {
+        let Some(path) = crate::theme::package_path(&state.paths, &hash) else {
+            return (StatusCode::NOT_FOUND, "Unknown theme").into_response();
+        };
+
+        match tokio::fs::read(&path).await {
+            Ok(data) => {
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/zip"),
+                );
+                headers.insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=31536000, immutable"),
+                );
+                (StatusCode::OK, headers, data).into_response()
+            }
+            Err(_) => (StatusCode::NOT_FOUND, "Unknown theme").into_response(),
+        }
     }
 }
 

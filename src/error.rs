@@ -13,6 +13,8 @@ pub enum Error {
     #[error("{0}")]
     JsonSerialize(#[from] serde_json::Error),
     #[error("{0}")]
+    Zip(#[from] zip::result::ZipError),
+    #[error("{0}")]
     Database(#[from] sqlx::Error),
     #[error("{0}")]
     PasswordHash(argon2::password_hash::Error),

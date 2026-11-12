@@ -24,12 +24,12 @@ pub enum YggdrasilSkinType {
     Slim,
 }
 
-impl ToString for YggdrasilSkinType {
-    fn to_string(&self) -> String {
-        match self {
-            Self::Default => "default".to_string(),
-            Self::Slim => "slim".to_string(),
-        }
+impl std::fmt::Display for YggdrasilSkinType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Default => "default",
+            Self::Slim => "slim",
+        })
     }
 }
 

@@ -273,10 +273,10 @@ fn parse_neoforge(version_str: &str) -> Option<(Option<String>, Loader)> {
 mod tests {
     use super::guess_version;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::Path;
     use syncraft_protocol::Loader;
 
-    fn make_lib(path: &PathBuf, mod_path: &str, version: &str) {
+    fn make_lib(path: &Path, mod_path: &str, version: &str) {
         let dir = path.join("libraries").join(mod_path).join(version);
         fs::create_dir_all(&dir).unwrap();
     }

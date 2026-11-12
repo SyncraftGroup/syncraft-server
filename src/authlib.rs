@@ -178,10 +178,10 @@ fn find_startup_scripts(root: &std::path::Path) -> Vec<PathBuf> {
             continue;
         }
 
-        if let Ok(content) = fs::read_to_string(&path) {
-            if content.contains("java") {
-                scripts.push(path);
-            }
+        if let Ok(content) = fs::read_to_string(&path)
+            && content.contains("java")
+        {
+            scripts.push(path);
         }
     }
 
@@ -250,10 +250,8 @@ fn inject_into_line(line: &str, javaagent_arg: &str) -> Option<String> {
     let trimmed = line.trim();
     let injection_point = if let Some(pos) = trimmed.find(" -jar ") {
         pos
-    } else if let Some(pos) = trimmed.find(' ') {
-        pos
     } else {
-        return None;
+        trimmed.find(' ')?
     };
 
     let leading = &trimmed[..injection_point];
